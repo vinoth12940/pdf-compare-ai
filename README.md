@@ -164,25 +164,85 @@ docker compose down
 
 ### Prerequisites
 
+<details>
+<summary><strong>🍎 macOS</strong></summary>
+
 ```bash
-# macOS
 brew install poppler tesseract
-
-# Ubuntu / Debian
-sudo apt-get install poppler-utils tesseract-ocr
-
-# Verify
 python3 --version   # 3.11+
 node --version       # 18+
 ```
 
+</details>
+
+<details>
+<summary><strong>🐧 Ubuntu / Debian</strong></summary>
+
+```bash
+sudo apt-get update
+sudo apt-get install -y poppler-utils tesseract-ocr
+python3 --version   # 3.11+
+node --version       # 18+
+```
+
+</details>
+
+<details>
+<summary><strong>🪟 Windows</strong></summary>
+
+#### Option A: Using Chocolatey (recommended)
+
+```powershell
+# Run PowerShell as Administrator
+choco install poppler tesseract python3 nodejs-lts -y
+```
+
+#### Option B: Using Scoop
+
+```powershell
+scoop install poppler tesseract python nodejs-lts
+```
+
+#### Option C: Manual Installation
+
+1. **Python 3.11+** — Download from [python.org](https://www.python.org/downloads/). Check ✅ "Add Python to PATH" during install.
+2. **Node.js 18+** — Download LTS from [nodejs.org](https://nodejs.org/)
+3. **Poppler** — Download from [poppler releases](https://github.com/ossamamehmood/Poppler-Windows/releases). Extract to `C:\poppler` and add `C:\poppler\Library\bin` to your system PATH.
+4. **Tesseract** — Download the installer from [UB Mannheim](https://github.com/UB-Mannheim/tesseract/wiki). Default install path is `C:\Program Files\Tesseract-OCR` (automatically added to PATH).
+
+#### Verify Installation (PowerShell)
+
+```powershell
+python --version      # 3.11+
+node --version        # 18+
+pdftoppm -h           # Should show usage (Poppler)
+tesseract --version   # Should show version (Tesseract)
+```
+
+</details>
+
+---
+
 ### Backend
+
+**macOS / Linux:**
 
 ```bash
 cd backend
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env   # add your GEMINI_API_KEY
+uvicorn main:app --reload --port 8000
+```
+
+**Windows (PowerShell):**
+
+```powershell
+cd backend
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env   # edit .env and add your GEMINI_API_KEY
 uvicorn main:app --reload --port 8000
 ```
 
@@ -193,6 +253,8 @@ cd frontend
 npm install --legacy-peer-deps
 npm run dev
 ```
+
+> 💡 **Tip:** On Windows, if you get `pdftoppm is not installed` errors, make sure Poppler's `bin` directory is in your system PATH and restart your terminal.
 
 ---
 
