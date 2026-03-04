@@ -66,9 +66,15 @@ class Comparator:
 
     def compare_text_blocks(
         self, blocks_a: List[Dict], blocks_b: List[Dict], section_type: str = "paragraph"
-    ) -> List[TextDiff]:
+    ) -> Tuple[List[TextDiff], int, float]:
+        """
+        Compare text blocks and return (changed_diffs, total_pairs, sum_of_scores).
+        total_pairs and sum_of_scores include unchanged items for accurate similarity calc.
+        """
         diffs = []
         pairs = _match_items(blocks_a, blocks_b)
+        total_pairs = len(pairs)
+        score_sum = 0.0
 
         for a_item, b_item in pairs:
             text_a = a_item["text"] if a_item else ""
@@ -76,6 +82,7 @@ class Comparator:
             page = (a_item or b_item).get("page", 0)
 
             score = _similarity(text_a, text_b)
+            score_sum += score
 
             if not a_item:
                 diff_type = DiffType.ADDED
@@ -96,7 +103,7 @@ class Comparator:
                     section_type=section_type,
                 ))
 
-        return diffs
+        return diffs, total_pairs, score_sum
 
     # ─── Table Comparison ──────────────────────────────────────────────────────
 
@@ -265,13 +272,13 @@ class Comparator:
         comparison_id = str(uuid.uuid4())
 
         # --- Text diffs ---
-        para_diffs = self.compare_text_blocks(
+        para_diffs, para_total, para_scores = self.compare_text_blocks(
             data_a.get("paragraphs", []), data_b.get("paragraphs", []), "paragraph"
         )
-        heading_diffs = self.compare_text_blocks(
+        heading_diffs, heading_total, heading_scores = self.compare_text_blocks(
             data_a.get("headings", []), data_b.get("headings", []), "heading"
         )
-        bullet_diffs = self.compare_text_blocks(
+        bullet_diffs, bullet_total, bullet_scores = self.compare_text_blocks(
             data_a.get("bullets", []), data_b.get("bullets", []), "bullet"
         )
         all_text_diffs = para_diffs + heading_diffs
@@ -287,14 +294,13 @@ class Comparator:
         )
 
         # --- Similarity score ---
-        total_items = len(all_text_diffs) + len(bullet_diffs) + len(table_diffs)
-        changed_items = sum(
-            1 for d in (all_text_diffs + bullet_diffs)
-            if d.diff_type != DiffType.UNCHANGED
-        ) + len(table_diffs)
-        similarity = round(
-            (1 - changed_items / max(total_items, 1)) * 100, 1
-        )
+        # Weighted average of all individual text similarity scores (including unchanged)
+        total_pairs = para_total + heading_total + bullet_total
+        total_score_sum = para_scores + heading_scores + bullet_scores
+        if total_pairs > 0:
+            similarity = round((total_score_sum / total_pairs) * 100, 1)
+        else:
+            similarity = 100.0  # No text to compare = identical
         similarity = max(0.0, min(100.0, similarity))
 
         # --- Overall Gemini summary ---

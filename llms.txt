@@ -1,0 +1,37 @@
+# PDF Compare AI
+> AI-powered PDF document comparison tool with visual diff highlighting, built with FastAPI + Next.js + Google Gemini.
+
+## Core Files
+- [backend/main.py]: FastAPI application — POST /compare, GET /health endpoints
+- [backend/services/pdf_extractor.py]: PDF parsing, text/table/image extraction, OCR, page rendering, pixel-level diff overlays
+- [backend/services/gemini_service.py]: Google Gemini AI integration — text comparison, image description, image comparison, overall summary, table analysis
+- [backend/services/comparator.py]: Comparison engine — text matching, similarity scoring, table diff, image diff, weighted average similarity calculation
+- [backend/models/schemas.py]: Pydantic models — ComparisonResult, TextDiff, TableDiff, TableCellDiff, ImageDiff, DiffType enum
+- [frontend/app/page.tsx]: Main UI — upload view, results view, stats sidebar, tabbed navigation, side-by-side viewer, diff cards, HTML report export
+- [frontend/lib/api.ts]: Typed API client with axios — ComparisonResult, TextDiff, TableDiff, ImageDiff interfaces
+- [frontend/app/globals.css]: Design system — Geist font, dark workspace theme, app shell layout, diff styling
+- [frontend/app/layout.tsx]: Root layout with metadata
+- [frontend/next.config.js]: Next.js config with standalone output and API URL environment variable
+
+## Key Concepts
+- **PDF Extraction**: Uses pdfplumber for text/tables, pypdf for images, pdf2image for page rendering, pytesseract for OCR fallback
+- **Comparison Engine**: Greedy text matching with difflib.SequenceMatcher, cell-level table diff, image diff via Gemini Vision
+- **Similarity Scoring**: Weighted average of per-pair text similarity scores across all paragraphs, headings, and bullets (including unchanged items)
+- **Pixel Diff Overlays**: numpy-based per-pixel comparison of rendered pages, thresholded and overlaid as semi-transparent red/green highlights
+- **Gemini AI**: Multimodal model used for semantic text comparison, image captioning, image comparison, overall executive summary, and table analysis
+- **DiffType Classification**: Added (only in Doc B), Removed (only in Doc A), Changed (in both but different), Unchanged (identical)
+
+## API
+- POST /compare — Upload two PDFs (file1, file2) with optional gemini_api_key, returns ComparisonResult JSON
+- GET /health — Returns status, ocr_available, gemini_configured
+
+## Tech Stack
+- Backend: Python 3.11, FastAPI 0.111, pdfplumber, pypdf, pdf2image, pytesseract, Pillow, numpy, google-genai, pandas
+- Frontend: Next.js 14.2.3, React 18, TypeScript 5, Axios, react-dropzone, lucide-react, react-diff-viewer-continued
+- Infrastructure: Docker Compose, Poppler, Tesseract
+
+## Documentation
+- [README.md]: Project overview and getting started
+- [docs/api.md]: Detailed API reference
+- [docs/architecture.md]: System architecture and ADRs
+- [CHANGELOG.md]: Version history

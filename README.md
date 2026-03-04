@@ -1,7 +1,7 @@
 <p align="center">
-  <h1 align="center">🔍 PDF Compare AI</h1>
+  <h1 align="center">PDF Compare AI</h1>
   <p align="center">
-    <strong>GenAI-powered PDF comparison tool with visual diff highlighting</strong>
+    <strong>AI-powered PDF comparison tool with visual diff highlighting</strong>
   </p>
   <p align="center">
     <em>Powered by Google Gemini AI · Dockerized · Side-by-Side Visual Comparison</em>
@@ -10,7 +10,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.11-blue?logo=python&logoColor=white" alt="Python 3.11"/>
-  <img src="https://img.shields.io/badge/Next.js-15-black?logo=nextdotjs&logoColor=white" alt="Next.js 15"/>
+  <img src="https://img.shields.io/badge/Next.js-14-black?logo=nextdotjs&logoColor=white" alt="Next.js 14"/>
+  <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white" alt="React 18"/>
   <img src="https://img.shields.io/badge/FastAPI-0.111-009688?logo=fastapi&logoColor=white" alt="FastAPI"/>
   <img src="https://img.shields.io/badge/Gemini_AI-Flash_3.1-4285F4?logo=google&logoColor=white" alt="Gemini AI"/>
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker"/>
@@ -18,53 +19,56 @@
 
 ---
 
-## 📖 Overview
+## Overview
 
-**PDF Compare AI** is an intelligent document comparison tool that goes beyond simple text diff. Upload two PDFs and get a comprehensive, AI-powered analysis covering text, tables, images, bullet points, headings — with a side-by-side visual comparison that highlights exactly what changed on every page.
+**PDF Compare AI** is an intelligent document comparison tool that goes beyond simple text diff. Upload two PDFs and get a comprehensive, AI-powered analysis covering text, tables, images, bullet points, and headings — with a side-by-side visual comparison that highlights exactly what changed on every page.
 
 Built for technical writers, legal teams, QA reviewers, and anyone who works with versioned documents.
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-### 🔎 Side-by-Side Visual Comparison
+### Side-by-Side Visual Comparison
 
 - Renders every page of both PDFs as high-quality images
 - **Pixel-level diff overlay** highlights changes directly on the pages
-- 🔴 Red overlay = Changed/removed content (Document A)
-- 🟢 Green overlay = Changed/added content (Document B)
-- Toggle between highlighted and original views with one click
-- Navigate between pages with pagination controls
+  - 🔴 Red overlay = Changed/removed content (Document A)
+  - 🟢 Green overlay = Changed/added content (Document B)
+- Navigate pages with dot pagination controls
+- Responsive split panel with scroll
 
-### 🤖 AI-Powered Analysis (Gemini)
+### AI-Powered Analysis (Gemini)
 
 - **Semantic text comparison** — understands meaning, not just characters
 - **Image description & comparison** — uses Gemini Vision to describe and compare embedded images
-- **Intelligent summary generation** — produces an overall change report
-- **Context-aware diff** — groups related changes together
+- **Intelligent summary generation** — produces an overall executive change report
+- **Table semantic analysis** — AI-powered summary of table differences
 
-### 📊 Multi-Format Content Detection
+### Multi-Format Content Detection
 
 | Content Type | Detection Method | AI Analysis |
 |:---|:---|:---|
-| 📝 Paragraphs | `pdfplumber` text extraction | ✅ Semantic similarity scoring |
-| 📋 Headings | Pattern + font-size detection | ✅ Structure change tracking |
-| • Bullet Points | Regex pattern matching | ✅ Item-level diff |
-| 🔢 Tables | Cell-level extraction | ✅ Row/column change summary |
-| 🖼️ Images | XObject extraction + PIL conversion | ✅ Gemini Vision description |
-| 🔍 Scanned PDFs | Tesseract OCR | ✅ Full text comparison |
+| Paragraphs | `pdfplumber` text extraction | ✅ Similarity scoring via `difflib` |
+| Headings | Pattern + font-size heuristics | ✅ Structure change tracking |
+| Bullet Points | Regex pattern matching | ✅ Item-level diff |
+| Tables | Cell-level extraction via `pdfplumber` | ✅ Row/column change detection |
+| Images | XObject extraction via `pypdf` + PIL conversion | ✅ Gemini Vision comparison |
+| Scanned PDFs | Tesseract OCR fallback | ✅ Full text comparison after OCR |
 
-### 📄 Detailed Comparison Reports
+### Similarity Scoring
 
-- **Overall similarity percentage** with change statistics
-- **Per-section diffs** — paragraphs, bullets, tables, images in separate tabs
-- **Cell-level table comparison** with added/removed row counts
-- **Change type classification** — Added, Removed, Changed, Unchanged
+- **Weighted average** of per-pair text similarity scores across all paragraphs, headings, and bullets
+- Individual diff scores shown per text block (0–100%)
+- Overall similarity gauge in the results sidebar
+
+### Export
+
+- **HTML report export** — generates a downloadable, self-contained comparison report with all diffs, stats, and the AI summary
 
 ---
 
-## 🏗️ Tech Stack
+## Tech Stack
 
 ### Backend
 
@@ -81,16 +85,21 @@ Built for technical writers, legal teams, QA reviewers, and anyone who works wit
 | **numpy** | ≥1.26.0 | Pixel-level diff computation |
 | **google-genai** | ≥1.0.0 | Gemini AI SDK (text + vision) |
 | **pandas** | 2.2.2 | Data manipulation for table comparison |
+| **python-multipart** | 0.0.9 | Multipart form data parsing for file uploads |
+| **aiofiles** | 23.2.1 | Async file I/O |
 | **python-dotenv** | 1.0.1 | Environment variable management |
 
 ### Frontend
 
 | Technology | Version | Purpose |
 |:---|:---|:---|
-| **Next.js** | 15 | React framework with SSR |
-| **React** | 19 | UI component library |
-| **TypeScript** | 5 | Type-safe JavaScript |
-| **Axios** | 1.7 | HTTP client for API calls |
+| **Next.js** | 14.2.3 | React framework with standalone output |
+| **React** | 18.3.1 | UI component library |
+| **TypeScript** | 5.4.5 | Type-safe JavaScript |
+| **Axios** | 1.7.2 | HTTP client for API calls |
+| **react-dropzone** | 14.2.3 | Drag-and-drop file upload |
+| **lucide-react** | 0.395.0 | SVG icon library |
+| **react-diff-viewer-continued** | 4.0.0 | Text diff visualization |
 
 ### Infrastructure
 
@@ -98,8 +107,8 @@ Built for technical writers, legal teams, QA reviewers, and anyone who works wit
 |:---|:---|
 | **Docker** | Containerization |
 | **Docker Compose** | Multi-container orchestration |
-| **Poppler** | PDF rendering engine (inside Docker) |
-| **Tesseract** | OCR engine (inside Docker) |
+| **Poppler** | PDF rendering engine (inside backend Docker image) |
+| **Tesseract** | OCR engine (inside backend Docker image) |
 
 ### AI Model
 
@@ -111,7 +120,7 @@ Built for technical writers, legal teams, QA reviewers, and anyone who works wit
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -148,9 +157,9 @@ docker compose up --build -d
 
 | Service | URL |
 |:---|:---|
-| 🌐 **Frontend** | [http://localhost:3000](http://localhost:3000) |
-| ⚡ **Backend API** | [http://localhost:8000](http://localhost:8000) |
-| 📚 **Swagger Docs** | [http://localhost:8000/docs](http://localhost:8000/docs) |
+| **Frontend** | [http://localhost:3000](http://localhost:3000) |
+| **Backend API** | [http://localhost:8000](http://localhost:8000) |
+| **Swagger Docs** | [http://localhost:8000/docs](http://localhost:8000/docs) |
 
 ### 5. Stop
 
@@ -160,12 +169,12 @@ docker compose down
 
 ---
 
-## 🖥️ Run Locally (without Docker)
+## Run Locally (without Docker)
 
 ### Prerequisites
 
 <details>
-<summary><strong>🍎 macOS</strong></summary>
+<summary><strong>macOS</strong></summary>
 
 ```bash
 brew install poppler tesseract
@@ -176,7 +185,7 @@ node --version       # 18+
 </details>
 
 <details>
-<summary><strong>🐧 Ubuntu / Debian</strong></summary>
+<summary><strong>Ubuntu / Debian</strong></summary>
 
 ```bash
 sudo apt-get update
@@ -188,7 +197,7 @@ node --version       # 18+
 </details>
 
 <details>
-<summary><strong>🪟 Windows</strong></summary>
+<summary><strong>Windows</strong></summary>
 
 #### Option A: Using Chocolatey (recommended)
 
@@ -254,44 +263,57 @@ npm install --legacy-peer-deps
 npm run dev
 ```
 
-> 💡 **Tip:** On Windows, if you get `pdftoppm is not installed` errors, make sure Poppler's `bin` directory is in your system PATH and restart your terminal.
+> **Tip:** On Windows, if you get `pdftoppm is not installed` errors, make sure Poppler's `bin` directory is in your system PATH and restart your terminal.
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 pdf-compare-ai/
 ├── docker-compose.yml              # Multi-container orchestration
+├── CHANGELOG.md                    # Version history (Keep a Changelog)
+├── llms.txt                        # AI-friendly documentation for RAG/crawlers
+│
+├── docs/
+│   ├── api.md                      # Detailed API reference
+│   └── architecture.md             # System architecture + ADRs
 │
 ├── backend/
 │   ├── Dockerfile                   # Python 3.11-slim + Poppler + Tesseract
-│   ├── requirements.txt             # Python dependencies
+│   ├── requirements.txt             # Python dependencies (13 packages)
 │   ├── .env.example                 # Environment variable template
-│   ├── main.py                      # FastAPI application & /compare endpoint
+│   ├── main.py                      # FastAPI app — /compare, /health endpoints
 │   ├── models/
-│   │   └── schemas.py               # Pydantic request/response models
+│   │   └── schemas.py               # Pydantic models (ComparisonResult, TextDiff,
+│   │                                #   TableDiff, TableCellDiff, ImageDiff, DiffType)
 │   └── services/
 │       ├── pdf_extractor.py         # PDF parsing, OCR, image extraction, diff overlays
-│       ├── gemini_service.py        # Google Gemini AI integration
-│       └── comparator.py           # Text, table, image, bullet comparison engine
+│       ├── gemini_service.py        # Google Gemini AI (text compare, image describe,
+│       │                            #   image compare, overall summary, table analysis)
+│       └── comparator.py            # Text, table, image, bullet comparison engine
+│                                    #   with weighted similarity scoring
 │
 └── frontend/
-    ├── Dockerfile                   # Node 20-alpine multi-stage build
-    ├── package.json                 # npm dependencies
+    ├── Dockerfile                   # Node 20-alpine, multi-stage build (deps → build → runner)
+    ├── package.json                 # npm dependencies (7 runtime, 3 dev)
     ├── tsconfig.json                # TypeScript configuration
-    ├── next.config.js               # Next.js config with API proxy
+    ├── next.config.js               # Next.js config (standalone output, API URL env)
     ├── app/
-    │   ├── page.tsx                 # Main comparison UI + SideBySideViewer
+    │   ├── page.tsx                 # Main app — upload view, results view,
+    │   │                            #   stats sidebar, tabbed navigation,
+    │   │                            #   side-by-side viewer, diff cards, report export
     │   ├── layout.tsx               # Root layout with metadata
-    │   └── globals.css              # Dark theme design system (CSS variables)
+    │   └── globals.css              # Product design system — Geist font,
+    │                                #   app shell, dark theme, diff styling
     └── lib/
-        └── api.ts                   # Typed API client with Axios
+        └── api.ts                   # Typed API client (ComparisonResult, TextDiff,
+                                     #   TableDiff, TableCellDiff, ImageDiff interfaces)
 ```
 
 ---
 
-## ⚙️ How It Works
+## Architecture
 
 ```
 ┌──────────────┐     ┌──────────────┐
@@ -305,7 +327,7 @@ pdf-compare-ai/
 │                                     │
 │  1. EXTRACT                         │
 │     pdfplumber → text, tables       │
-│     pypdf → embedded images         │
+│     pypdf → embedded images (PNG)   │
 │     pytesseract → OCR (if scanned)  │
 │     pdf2image → page renders        │
 │                                     │
@@ -318,6 +340,7 @@ pdf-compare-ai/
 │     Semantic text comparison        │
 │     Vision-based image comparison   │
 │     Overall summary generation      │
+│     Table semantic analysis         │
 │                                     │
 │  4. OVERLAY                         │
 │     Generate red/green highlights   │
@@ -328,18 +351,20 @@ pdf-compare-ai/
 ┌─────────────────────────────────────┐
 │          Next.js Frontend           │
 │                                     │
-│  📄 Side-by-Side Viewer (default)   │
-│  📝 Paragraph Diff Tab             │
-│  • Bullet Point Diff Tab            │
-│  🔢 Table Diff Tab                 │
-│  🖼️ Image Diff Tab                │
-│  📊 AI Summary Tab                 │
+│  Side-by-Side Viewer (default)      │
+│  AI Summary Tab                     │
+│  Paragraph Diff Tab                 │
+│  Bullet Point Diff Tab              │
+│  Table Diff Tab                     │
+│  Image Diff Tab                     │
+│  Stats Sidebar + Similarity Gauge   │
+│  HTML Report Export                  │
 └─────────────────────────────────────┘
 ```
 
 ---
 
-## 🔌 API Reference
+## API Reference
 
 ### `POST /compare`
 
@@ -349,8 +374,8 @@ Upload two PDFs for comparison.
 
 | Field | Type | Required | Description |
 |:---|:---|:---|:---|
-| `file_a` | File (PDF) | ✅ | Original document |
-| `file_b` | File (PDF) | ✅ | Document to compare |
+| `file1` | File (PDF) | ✅ | First document |
+| `file2` | File (PDF) | ✅ | Second document |
 | `gemini_api_key` | String | ❌ | Override API key (optional if set in `.env`) |
 
 **Response:** `application/json`
@@ -360,22 +385,60 @@ Upload two PDFs for comparison.
   "comparison_id": "uuid",
   "file1_name": "original.pdf",
   "file2_name": "updated.pdf",
-  "overall_summary": "AI-generated change summary...",
-  "similarity_percentage": 85.5,
-  "text_diffs": [...],        // Paragraph-level differences
-  "table_diffs": [...],       // Cell-level table differences
-  "image_diffs": [...],       // Image change descriptions
-  "bullet_diffs": [...],      // Bullet point differences
+  "overall_summary": "AI-generated executive summary...",
+  "similarity_percentage": 87.3,
+  "text_diffs": [
+    {
+      "page": 1,
+      "content_a": "Text from Document A",
+      "content_b": "Text from Document B",
+      "diff_type": "changed",       // "added" | "removed" | "changed" | "unchanged"
+      "similarity_score": 0.85,
+      "section_type": "paragraph"    // "paragraph" | "heading" | "bullet"
+    }
+  ],
+  "table_diffs": [
+    {
+      "page": 1,
+      "table_index": 0,
+      "headers_a": ["Col1", "Col2"],
+      "headers_b": ["Col1", "Col2"],
+      "cell_diffs": [
+        { "row": 0, "col": 1, "value_a": "100", "value_b": "200", "diff_type": "changed" }
+      ],
+      "rows_added": 0,
+      "rows_removed": 0,
+      "diff_type": "changed"
+    }
+  ],
+  "image_diffs": [
+    {
+      "page": 1,
+      "image_index": 0,
+      "description_a": "Gemini description of image A",
+      "description_b": "Gemini description of image B",
+      "diff_type": "changed",
+      "ai_analysis": "The images show different data values..."
+    }
+  ],
+  "bullet_diffs": [...],            // Same structure as text_diffs
   "page_count_a": 3,
   "page_count_b": 3,
-  "page_renders_a": [...],    // Base64 PNG page images (Doc A)
-  "page_renders_b": [...],    // Base64 PNG page images (Doc B)
-  "diff_overlay_a": [...],    // Base64 PNG with red highlights (Doc A)
-  "diff_overlay_b": [...],    // Base64 PNG with green highlights (Doc B)
+  "page_renders_a": ["base64..."],  // Base64 PNG page images (Document A)
+  "page_renders_b": ["base64..."],  // Base64 PNG page images (Document B)
+  "diff_overlay_a": ["base64..."],  // Base64 PNG with red highlights (Document A)
+  "diff_overlay_b": ["base64..."],  // Base64 PNG with green highlights (Document B)
   "stats": {
-    "total_text_diffs": 12,
-    "total_table_diffs": 2,
-    "total_image_diffs": 1,
+    "paragraphs_changed": 5,
+    "paragraphs_added": 1,
+    "paragraphs_removed": 0,
+    "bullets_changed": 2,
+    "bullets_added": 0,
+    "bullets_removed": 0,
+    "tables_changed": 1,
+    "images_changed": 1,
+    "images_added": 0,
+    "images_removed": 0,
     "doc_a_is_scanned": false,
     "doc_b_is_scanned": false
   }
@@ -386,30 +449,84 @@ Upload two PDFs for comparison.
 
 Health check endpoint.
 
----
+**Response:**
 
-## 🎨 UI Features
-
-- **Dark theme** with CSS custom properties design system
-- **Drag-and-drop** file upload with visual feedback
-- **Real-time progress** bar during comparison
-- **Tabbed interface** — Side-by-Side / Summary / Paragraphs / Bullets / Tables / Images
-- **Diff highlighting** with red (removed) and green (added) indicators
-- **Scanned PDF detection** with automatic OCR warnings
-- **Responsive design** that works on desktop and tablet screens
+```json
+{
+  "status": "ok",
+  "ocr_available": true,
+  "gemini_configured": true
+}
+```
 
 ---
 
-## 🔧 Environment Variables
+## UI Design
+
+The frontend uses a **product-grade app shell** design inspired by Linear, Vercel, and Raycast:
+
+- **Geist** font family for a clean, modern look
+- **App shell layout** — top bar + full-height workspace area
+- **Dark theme** with carefully tuned zinc/gray palette
+- **Stats sidebar** — similarity gauge (SVG ring), page counts, and per-type diff counts
+- **Tabbed toolbar** — Side by Side, Summary, Paragraphs, Bullets, Tables, Images  
+- **Drag-and-drop** file upload with visual state feedback (idle → active → uploaded)
+- **Progress indicator** with shimmer animation during AI analysis
+- **Collapsible diff cards** with color-coded badges (added/removed/changed)
+- **Side-by-side split panels** with dot pagination for page navigation
+- **HTML report export** with matching stats and diff tables
+- **Responsive design** — collapses sidebar and stacks panels on smaller screens
+- **Reduced motion support** via `prefers-reduced-motion` media query
+
+---
+
+## Environment Variables
 
 | Variable | Required | Default | Description |
 |:---|:---|:---|:---|
 | `GEMINI_API_KEY` | ✅ | — | Google Gemini API key |
 | `GEMINI_MODEL` | ❌ | `gemini-3.1-flash-lite-preview` | Gemini model to use |
+| `NEXT_PUBLIC_API_URL` | ❌ | `http://localhost:8000` | Backend API URL (set in `docker-compose.yml`) |
 
 ---
 
-## 📝 License
+## Docker Details
+
+### Backend Dockerfile
+
+- Base: `python:3.11-slim`
+- Installs: `poppler-utils`, `tesseract-ocr`, `tesseract-ocr-eng`, `libgl1`
+- Runs on port `8000`
+
+### Frontend Dockerfile
+
+- Multi-stage build: `node:20-alpine`
+  - **deps stage** — installs `npm` packages
+  - **builder stage** — runs `next build` with standalone output
+  - **runner stage** — minimal production image with `node server.js`
+- Runs on port `3000`
+
+### Docker Compose
+
+- Backend health check: `curl http://localhost:8000/health` every 30s
+- Frontend depends on backend
+- Both services have `restart: unless-stopped`
+- Backend env file: `./backend/.env`
+
+---
+
+## Documentation
+
+| Document | Description |
+|:---|:---|
+| [API Reference](./docs/api.md) | Detailed endpoint specs, request/response schemas, examples |
+| [Architecture](./docs/architecture.md) | System diagram, data flow, and Architecture Decision Records |
+| [Changelog](./CHANGELOG.md) | Version history and release notes |
+| [llms.txt](./llms.txt) | AI-friendly project documentation for RAG/crawlers |
+
+---
+
+## License
 
 MIT
 
