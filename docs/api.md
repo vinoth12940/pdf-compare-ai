@@ -47,6 +47,7 @@ Upload two PDF files and receive a structured AI-powered comparison.
 | `table_diffs` | `TableDiff[]` | Table-level differences |
 | `image_diffs` | `ImageDiff[]` | Image-level differences |
 | `bullet_diffs` | `TextDiff[]` | Bullet point differences |
+| `ai_page_diffs` | `PageDiff[] \| null` | Gemini page-by-page differences in top-to-bottom order |
 | `page_count_a` | `int` | Number of pages in Document A |
 | `page_count_b` | `int` | Number of pages in Document B |
 | `page_renders_a` | `string[] \| null` | Base64 PNG renders of Document A pages |
@@ -65,6 +66,19 @@ Upload two PDF files and receive a structured AI-powered comparison.
 | `diff_type` | `DiffType` | `"added"`, `"removed"`, `"changed"`, or `"unchanged"` |
 | `similarity_score` | `float` | Similarity between content_a and content_b (0.0–1.0) |
 | `section_type` | `string` | `"paragraph"`, `"heading"`, or `"bullet"` |
+| `position` | `float` | Vertical position on page used for top-to-bottom ordering |
+
+#### PageDiff
+
+| Field | Type | Description |
+|:---|:---|:---|
+| `page` | `int` | Page number where the difference appears |
+| `location` | `string` | Approximate location (`top`, `upper-third`, `middle`, `lower-third`, `bottom`) |
+| `section` | `string` | Section/heading where the difference is observed |
+| `change_type` | `string` | `"added"`, `"removed"`, or `"changed"` |
+| `description` | `string` | Human-readable explanation of the change |
+| `text_in_a` | `string \| null` | Exact text from Document A (if present) |
+| `text_in_b` | `string \| null` | Exact text from Document B (if present) |
 
 #### TableDiff
 
@@ -166,6 +180,17 @@ curl -X POST http://localhost:8000/compare \
     }
   ],
   "bullet_diffs": [],
+  "ai_page_diffs": [
+    {
+      "page": 1,
+      "location": "top",
+      "section": "Header",
+      "change_type": "changed",
+      "description": "Company name updated",
+      "text_in_a": "ABC Pvt Ltd",
+      "text_in_b": "ABC Technologies Pvt Ltd"
+    }
+  ],
   "page_count_a": 3,
   "page_count_b": 4,
   "page_renders_a": ["iVBORw0KGgo..."],

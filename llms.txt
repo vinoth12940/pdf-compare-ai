@@ -4,11 +4,11 @@
 ## Core Files
 - [backend/main.py]: FastAPI application — POST /compare, GET /health endpoints
 - [backend/services/pdf_extractor.py]: PDF parsing, text/table/image extraction, OCR, page rendering, pixel-level diff overlays
-- [backend/services/gemini_service.py]: Google Gemini AI integration — text comparison, image description, image comparison, overall summary, table analysis
-- [backend/services/comparator.py]: Comparison engine — text matching, similarity scoring, table diff, image diff, weighted average similarity calculation
-- [backend/models/schemas.py]: Pydantic models — ComparisonResult, TextDiff, TableDiff, TableCellDiff, ImageDiff, DiffType enum
-- [frontend/app/page.tsx]: Main UI — upload view, results view, stats sidebar, tabbed navigation, side-by-side viewer, diff cards, HTML report export
-- [frontend/lib/api.ts]: Typed API client with axios — ComparisonResult, TextDiff, TableDiff, ImageDiff interfaces
+- [backend/services/gemini_service.py]: Google Gemini AI integration — text comparison, image description, image comparison, overall summary, table analysis, page-by-page sequential comparison
+- [backend/services/comparator.py]: Comparison engine — text matching, similarity scoring, table diff, image diff, weighted average similarity calculation, ai_page_diffs aggregation
+- [backend/models/schemas.py]: Pydantic models — ComparisonResult, TextDiff(position), PageDiff, TableDiff, TableCellDiff, ImageDiff, DiffType enum
+- [frontend/app/page.tsx]: Main UI — upload view, results view, stats sidebar, AI Analysis default tab, side-by-side viewer with overlay ON/OFF toggle, diff cards, HTML report export
+- [frontend/lib/api.ts]: Typed API client with axios — ComparisonResult, TextDiff, PageDiff, TableDiff, ImageDiff interfaces
 - [frontend/app/globals.css]: Design system — Geist font, dark workspace theme, app shell layout, diff styling
 - [frontend/app/layout.tsx]: Root layout with metadata
 - [frontend/next.config.js]: Next.js config with standalone output and API URL environment variable
@@ -17,8 +17,8 @@
 - **PDF Extraction**: Uses pdfplumber for text/tables, pypdf for images, pdf2image for page rendering, pytesseract for OCR fallback
 - **Comparison Engine**: Greedy text matching with difflib.SequenceMatcher, cell-level table diff, image diff via Gemini Vision
 - **Similarity Scoring**: Weighted average of per-pair text similarity scores across all paragraphs, headings, and bullets (including unchanged items)
-- **Pixel Diff Overlays**: numpy-based per-pixel comparison of rendered pages, thresholded and overlaid as semi-transparent red/green highlights
-- **Gemini AI**: Multimodal model used for semantic text comparison, image captioning, image comparison, overall executive summary, and table analysis
+- **Pixel Diff Overlays**: aligned/binarized render-mask comparison with cleanup filters, overlaid as semi-transparent red/green highlights
+- **Gemini AI**: Multimodal model used for semantic text comparison, image captioning, image comparison, overall executive summary, table analysis, and page-by-page ordered diffs
 - **DiffType Classification**: Added (only in Doc B), Removed (only in Doc A), Changed (in both but different), Unchanged (identical)
 
 ## API

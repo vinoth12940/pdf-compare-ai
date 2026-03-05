@@ -32,7 +32,8 @@ Built for technical writers, legal teams, QA reviewers, and anyone who works wit
 ### Side-by-Side Visual Comparison
 
 - Renders every page of both PDFs as high-quality images
-- **Pixel-level diff overlay** highlights changes directly on the pages
+- **Overlay toggle in viewer** lets you switch between clean pages and highlighted diff mode
+- **Aligned visual diff overlay** highlights changes directly on the pages
   - 🔴 Red overlay = Changed/removed content (Document A)
   - 🟢 Green overlay = Changed/added content (Document B)
 - Navigate pages with dot pagination controls
@@ -40,6 +41,7 @@ Built for technical writers, legal teams, QA reviewers, and anyone who works wit
 
 ### AI-Powered Analysis (Gemini)
 
+- **Page-by-page AI analysis** (differences ordered top-to-bottom)
 - **Semantic text comparison** — understands meaning, not just characters
 - **Image description & comparison** — uses Gemini Vision to describe and compare embedded images
 - **Intelligent summary generation** — produces an overall executive change report
@@ -286,11 +288,12 @@ pdf-compare-ai/
 │   ├── main.py                      # FastAPI app — /compare, /health endpoints
 │   ├── models/
 │   │   └── schemas.py               # Pydantic models (ComparisonResult, TextDiff,
-│   │                                #   TableDiff, TableCellDiff, ImageDiff, DiffType)
+│   │                                #   PageDiff, TableDiff, TableCellDiff, ImageDiff, DiffType)
 │   └── services/
 │       ├── pdf_extractor.py         # PDF parsing, OCR, image extraction, diff overlays
 │       ├── gemini_service.py        # Google Gemini AI (text compare, image describe,
-│       │                            #   image compare, overall summary, table analysis)
+│       │                            #   image compare, overall summary, table analysis,
+│       │                            #   page-by-page sequential comparison)
 │       └── comparator.py            # Text, table, image, bullet comparison engine
 │                                    #   with weighted similarity scoring
 │
@@ -334,27 +337,30 @@ pdf-compare-ai/
 │  2. COMPARE                         │
 │     difflib → text similarity       │
 │     cell-level → table diff         │
-│     numpy → pixel-level page diff   │
+│     matched text/table/image diff   │
 │                                     │
 │  3. AI ANALYZE (Gemini)             │
 │     Semantic text comparison        │
 │     Vision-based image comparison   │
 │     Overall summary generation      │
 │     Table semantic analysis         │
+│     Page-by-page ordered diff       │
 │                                     │
 │  4. OVERLAY                         │
-│     Generate red/green highlights   │
-│     on changed page regions         │
+│     Aligned render-mask diff        │
+│     Toggle ON/OFF in viewer         │
 └──────────────┬──────────────────────┘
                │
                ▼
 ┌─────────────────────────────────────┐
 │          Next.js Frontend           │
 │                                     │
-│  Side-by-Side Viewer (default)      │
+│  AI Analysis Tab (default)          │
+│  Side-by-Side Viewer + Overlay Toggle │
 │  AI Summary Tab                     │
 │  Paragraph Diff Tab                 │
 │  Bullet Point Diff Tab              │
+│  Formatting Diff Tab                │
 │  Table Diff Tab                     │
 │  Image Diff Tab                     │
 │  Stats Sidebar + Similarity Gauge   │
@@ -422,6 +428,17 @@ Upload two PDFs for comparison.
     }
   ],
   "bullet_diffs": [...],            // Same structure as text_diffs
+  "ai_page_diffs": [
+    {
+      "page": 1,
+      "location": "top",
+      "section": "Header",
+      "change_type": "changed",
+      "description": "Company name updated",
+      "text_in_a": "ABC Pvt Ltd",
+      "text_in_b": "ABC Technologies Pvt Ltd"
+    }
+  ],
   "page_count_a": 3,
   "page_count_b": 3,
   "page_renders_a": ["base64..."],  // Base64 PNG page images (Document A)
@@ -469,11 +486,12 @@ The frontend uses a **product-grade app shell** design inspired by Linear, Verce
 - **App shell layout** — top bar + full-height workspace area
 - **Dark theme** with carefully tuned zinc/gray palette
 - **Stats sidebar** — similarity gauge (SVG ring), page counts, and per-type diff counts
-- **Tabbed toolbar** — Side by Side, Summary, Paragraphs, Bullets, Tables, Images  
+- **Tabbed toolbar** — AI Analysis, Side by Side, Summary, Paragraphs, Bullets, Formatting, Tables, Images  
 - **Drag-and-drop** file upload with visual state feedback (idle → active → uploaded)
 - **Progress indicator** with shimmer animation during AI analysis
 - **Collapsible diff cards** with color-coded badges (added/removed/changed)
-- **Side-by-side split panels** with dot pagination for page navigation
+- **Word-level text highlighting** for changed text blocks
+- **Side-by-side split panels** with dot pagination and overlay ON/OFF toggle
 - **HTML report export** with matching stats and diff tables
 - **Responsive design** — collapses sidebar and stacks panels on smaller screens
 - **Reduced motion support** via `prefers-reduced-motion` media query

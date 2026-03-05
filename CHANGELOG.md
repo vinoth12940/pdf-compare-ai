@@ -6,6 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.3.0] — 2026-03-04
+
+### Added
+
+- **Gemini page-by-page sequential comparison** (`ai_page_diffs`) with top-to-bottom ordering and exact text snippets
+- **AI Analysis tab** in frontend as default results tab
+- **Word-level text highlighting** for changed text blocks
+- **Side-by-side overlay ON/OFF toggle** for visual comparison control
+
+### Changed
+
+- **TextDiff schema** now includes `position` for deterministic top-to-bottom ordering
+- **Diff overlay pipeline** now uses binarization + alignment + mask cleanup to reduce render-noise false positives
+- Updated project documentation (`README.md`, `docs/api.md`, `docs/architecture.md`, `llms.txt`) to match current backend/frontend behavior
+
+---
+
 ## [1.2.0] — 2026-03-04
 
 ### Changed

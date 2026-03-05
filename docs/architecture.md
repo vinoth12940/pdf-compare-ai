@@ -47,17 +47,18 @@ PDF Compare AI is a two-service application that uses AI-augmented document anal
 │    │     ├── describe_image()                                │
 │    │     ├── compare_images()                                │
 │    │     ├── generate_overall_summary()                      │
-│    │     └── compare_table_semantically()                    │
+│    │     ├── compare_table_semantically()                    │
+│    │     └── compare_pages_sequentially()                    │
 │    │                                                         │
 │    └── comparator.py                                         │
 │          ├── compare_text_blocks()  → (diffs, total, scores) │
 │          ├── compare_tables()       → TableDiff[]            │
 │          ├── compare_images()       → ImageDiff[]            │
-│          └── compare()              → ComparisonResult       │
+│          └── compare()              → ComparisonResult (+ai_page_diffs) │
 │                                                              │
 │  models/schemas.py — Pydantic models                         │
-│    ComparisonResult, TextDiff, TableDiff, TableCellDiff,     │
-│    ImageDiff, DiffType enum                                  │
+│    ComparisonResult, TextDiff(position), PageDiff,           │
+│    TableDiff, TableCellDiff, ImageDiff, DiffType enum        │
 └──────────────────────────┬───────────────────────────────────┘
                            │
                            ▼
@@ -99,7 +100,8 @@ For each PDF, `PDFExtractor.extract_all()` runs:
 3. **Classification** — UNCHANGED (≥ 95%), CHANGED, ADDED, or REMOVED
 4. **Table diff** — cell-by-cell comparison across matched tables
 5. **Image diff** — Gemini Vision analyzes page renders side-by-side
-6. **Overall similarity** — weighted average of all text pair scores
+6. **Page AI diff** — Gemini compares each page pair top-to-bottom
+7. **Overall similarity** — weighted average of all text pair scores
 
 ### 4. AI Analysis Phase
 
@@ -108,16 +110,17 @@ For each PDF, `PDFExtractor.extract_all()` runs:
 1. **Overall summary** — sends text excerpts + up to 2 page renders from each document
 2. **Image comparison** — sends paired images for visual diff analysis
 3. **Image description** — individual image captioning for added/removed images
+4. **Page sequence comparison** — `compare_pages_sequentially()` produces ordered `ai_page_diffs`
 
 ### 5. Overlay Generation
 
 `PDFExtractor.generate_diff_overlays()`:
 
 1. Decodes base64 page renders to numpy arrays
-2. Computes per-pixel absolute difference
-3. Applies threshold to identify changed regions
-4. Overlays semi-transparent red (Doc A) / green (Doc B) on changed pixels
-5. Returns new base64 PNG images with highlights
+2. Binarizes and aligns page masks to reduce render-offset noise
+3. Computes XOR diff mask and applies noise cleanup
+4. Overlays semi-transparent red (Doc A) / green (Doc B) on changed regions
+5. Returns new base64 PNG images with highlights (toggleable in UI)
 
 ### 6. Response
 
@@ -186,14 +189,15 @@ Backend returns `ComparisonResult` JSON with all diffs, renders, overlays, and s
 
 **Context:** Users need to visually see where changes occur on each page, not just read text diffs.
 
-**Decision:** Render each page as PNG, compute per-pixel absolute difference using numpy, threshold to identify changed regions, and overlay semi-transparent red/green highlights.
+**Decision:** Render each page as PNG, align page content masks, compute cleaned XOR differences, and overlay semi-transparent red/green highlights.
 
 **Consequences:**
 
 - ✅ Intuitive visual diff — users immediately see what changed
 - ✅ Works for layout, formatting, and image changes (not just text)
 - ❌ Page renders add to response size (~100KB per page per document)
-- ❌ Minor alignment differences (e.g., anti-aliasing) may cause false positives
+- ✅ Alignment + cleanup reduces anti-aliasing false positives
+- ❌ Very different page layouts can still produce broad highlighted regions
 
 ---
 
