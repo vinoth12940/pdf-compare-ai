@@ -12,6 +12,7 @@ export interface ComparisonResult {
     table_diffs: TableDiff[];
     image_diffs: ImageDiff[];
     bullet_diffs: TextDiff[];
+    ai_page_diffs?: PageDiff[] | null;
     page_count_a: number;
     page_count_b: number;
     page_renders_a?: string[];
@@ -28,6 +29,8 @@ export interface TextDiff {
     diff_type: 'added' | 'removed' | 'changed' | 'unchanged';
     similarity_score: number;
     section_type: string;
+    style_changes?: string[] | null;
+    layout_changes?: string[] | null;
 }
 
 export interface TableDiff {
@@ -56,6 +59,16 @@ export interface ImageDiff {
     description_b: string | null;
     diff_type: 'added' | 'removed' | 'changed' | 'unchanged';
     ai_analysis: string;
+}
+
+export interface PageDiff {
+    page: number;
+    location: string;
+    section: string;
+    change_type: 'added' | 'removed' | 'changed';
+    description: string;
+    text_in_a: string | null;
+    text_in_b: string | null;
 }
 
 export async function comparePDFs(

@@ -6,9 +6,9 @@ import {
     FileText, Upload, CheckCircle, AlertCircle,
     ChevronDown, ChevronUp, Download, Loader2,
     Table2, Image as ImageIcon, List, AlignLeft,
-    Key, Eye, ArrowLeft, ArrowRight, ScanSearch, Zap, X
+    Key, Eye, ArrowLeft, ArrowRight, ScanSearch, Zap, X, Paintbrush
 } from 'lucide-react';
-import { comparePDFs, ComparisonResult, TextDiff, TableDiff, ImageDiff } from '@/lib/api';
+import { comparePDFs, ComparisonResult, TextDiff, TableDiff, ImageDiff, PageDiff } from '@/lib/api';
 import axios from 'axios';
 
 /* ═══════════════════════════════════════════════════════════════
@@ -49,9 +49,15 @@ function FileDropzone({ label, variant, file, onFile }: {
 
 function SideBySideViewer({ result }: { result: ComparisonResult }) {
     const [page, setPage] = useState(0);
+    const [showOverlay, setShowOverlay] = useState(true);
     const maxPages = Math.max(result.page_count_a, result.page_count_b);
-    const imgA = result.diff_overlay_a?.[page] || result.page_renders_a?.[page];
-    const imgB = result.diff_overlay_b?.[page] || result.page_renders_b?.[page];
+    const hasOverlay = !!(result.diff_overlay_a?.length || result.diff_overlay_b?.length);
+    const imgA = showOverlay && hasOverlay
+        ? (result.diff_overlay_a?.[page] || result.page_renders_a?.[page])
+        : result.page_renders_a?.[page];
+    const imgB = showOverlay && hasOverlay
+        ? (result.diff_overlay_b?.[page] || result.page_renders_b?.[page])
+        : result.page_renders_b?.[page];
 
     return (
         <div className="sbs-viewer">
@@ -72,6 +78,25 @@ function SideBySideViewer({ result }: { result: ComparisonResult }) {
                 <span style={{ color: 'var(--text-ghost)', fontSize: 11, marginLeft: 4, fontFamily: "'Geist Mono', monospace" }}>
                     {page + 1}/{maxPages}
                 </span>
+                {hasOverlay && (
+                    <button
+                        onClick={() => setShowOverlay(v => !v)}
+                        style={{
+                            marginLeft: 'auto',
+                            padding: '4px 10px',
+                            fontSize: 11,
+                            fontFamily: "'Geist Mono', monospace",
+                            borderRadius: 6,
+                            border: '1px solid var(--border)',
+                            background: showOverlay ? 'var(--accent)' : 'var(--bg-card)',
+                            color: showOverlay ? '#fff' : 'var(--text-secondary)',
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                        }}
+                    >
+                        {showOverlay ? '● Diff Overlay ON' : '○ Diff Overlay OFF'}
+                    </button>
+                )}
             </div>
             <div className="sbs-panels">
                 <div className="sbs-panel">
@@ -93,8 +118,96 @@ function EmptyPage() {
     );
 }
 
+/* ── Word-level diff helper ── */
+function getWordDiffParts(textA: string, textB: string): {
+    partsA: Array<{ text: string; highlight: boolean }>;
+    partsB: Array<{ text: string; highlight: boolean }>;
+} {
+    if (!textA && !textB) return { partsA: [], partsB: [] };
+    if (!textA) return { partsA: [], partsB: [{ text: textB, highlight: true }] };
+    if (!textB) return { partsA: [{ text: textA, highlight: true }], partsB: [] };
+
+    const wordsA = textA.split(/\s+/).filter(Boolean);
+    const wordsB = textB.split(/\s+/).filter(Boolean);
+    const m = wordsA.length, n = wordsB.length;
+
+    // Bail out for very long texts
+    if (m > 400 || n > 400) {
+        return {
+            partsA: [{ text: textA, highlight: true }],
+            partsB: [{ text: textB, highlight: true }],
+        };
+    }
+
+    // LCS table
+    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            dp[i][j] = wordsA[i - 1].toLowerCase() === wordsB[j - 1].toLowerCase()
+                ? dp[i - 1][j - 1] + 1
+                : Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+    }
+
+    // Backtrack
+    let i = m, j = n;
+    const seqA: { word: string; hl: boolean }[] = [];
+    const seqB: { word: string; hl: boolean }[] = [];
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && wordsA[i - 1].toLowerCase() === wordsB[j - 1].toLowerCase()) {
+            seqA.unshift({ word: wordsA[i - 1], hl: false });
+            seqB.unshift({ word: wordsB[j - 1], hl: false });
+            i--; j--;
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+            seqB.unshift({ word: wordsB[j - 1], hl: true });
+            j--;
+        } else if (i > 0) {
+            seqA.unshift({ word: wordsA[i - 1], hl: true });
+            i--;
+        } else break;
+    }
+
+    // Merge consecutive same-type words
+    const merge = (seq: { word: string; hl: boolean }[]) => {
+        const result: { text: string; highlight: boolean }[] = [];
+        for (const { word, hl } of seq) {
+            const last = result[result.length - 1];
+            if (last && last.highlight === hl) {
+                last.text += ' ' + word;
+            } else {
+                result.push({ text: word, highlight: hl });
+            }
+        }
+        return result;
+    };
+
+    return { partsA: merge(seqA), partsB: merge(seqB) };
+}
+
+function HighlightedText({ parts, variant }: {
+    parts: Array<{ text: string; highlight: boolean }>;
+    variant: 'a' | 'b';
+}) {
+    if (parts.length === 0) return <span style={{ color: 'var(--text-ghost)', fontStyle: 'italic' }}>empty</span>;
+    return (
+        <>
+            {parts.map((part, i) =>
+                part.highlight
+                    ? <mark key={i} className={`word-diff-${variant}`}>{part.text}</mark>
+                    : <span key={i}>{part.text} </span>
+            )}
+        </>
+    );
+}
+
 function TextDiffCard({ diff }: { diff: TextDiff }) {
     const [open, setOpen] = useState(diff.diff_type !== 'unchanged');
+    const styleChanges = diff.style_changes || [];
+    const layoutChanges = diff.layout_changes || [];
+    const hasFormatting = styleChanges.length > 0 || layoutChanges.length > 0;
+    const { partsA, partsB } = diff.diff_type === 'changed'
+        ? getWordDiffParts(diff.content_a, diff.content_b)
+        : { partsA: diff.content_a ? [{ text: diff.content_a, highlight: false }] : [], partsB: diff.content_b ? [{ text: diff.content_b, highlight: false }] : [] };
     return (
         <div className="diff-card animate-in">
             <div className="diff-card-header" onClick={() => setOpen(!open)}>
@@ -105,6 +218,7 @@ function TextDiffCard({ diff }: { diff: TextDiff }) {
                     <span style={{ color: 'var(--text-ghost)', fontFamily: "'Geist Mono', monospace", fontSize: 11 }}>
                         {Math.round(diff.similarity_score * 100)}%
                     </span>
+                    {hasFormatting && <span className="badge badge-changed">format/layout</span>}
                 </div>
                 {open ? <ChevronUp size={14} color="var(--text-ghost)" /> : <ChevronDown size={14} color="var(--text-ghost)" />}
             </div>
@@ -113,13 +227,27 @@ function TextDiffCard({ diff }: { diff: TextDiff }) {
                     <div className="diff-grid">
                         <div className={`diff-col ${diff.diff_type === 'removed' ? 'removed' : diff.diff_type === 'changed' ? 'removed' : ''}`}>
                             <div className="diff-col-label a">Document A</div>
-                            {diff.content_a || <span style={{ color: 'var(--text-ghost)', fontStyle: 'italic' }}>empty</span>}
+                            <HighlightedText parts={partsA} variant="a" />
                         </div>
                         <div className={`diff-col ${diff.diff_type === 'added' ? 'added' : diff.diff_type === 'changed' ? 'added' : ''}`}>
                             <div className="diff-col-label b">Document B</div>
-                            {diff.content_b || <span style={{ color: 'var(--text-ghost)', fontStyle: 'italic' }}>empty</span>}
+                            <HighlightedText parts={partsB} variant="b" />
                         </div>
                     </div>
+                    {hasFormatting && (
+                        <div style={{ marginTop: 12, display: 'grid', gap: 6 }}>
+                            {styleChanges.length > 0 && (
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                    <strong style={{ color: 'var(--text-primary)' }}>Formatting:</strong> {styleChanges.join(' · ')}
+                                </div>
+                            )}
+                            {layoutChanges.length > 0 && (
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                    <strong style={{ color: 'var(--text-primary)' }}>Layout:</strong> {layoutChanges.join(' · ')}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
         </div>
@@ -193,6 +321,53 @@ function ImageDiffCard({ diff }: { diff: ImageDiff }) {
     );
 }
 
+function AIDiffCard({ diff, index }: { diff: PageDiff; index: number }) {
+    const [open, setOpen] = useState(true);
+    const changeIcon = diff.change_type === 'added' ? '+'
+        : diff.change_type === 'removed' ? '−'
+        : '~';
+
+    return (
+        <div className="ai-diff-card animate-in">
+            <div className="ai-diff-header" onClick={() => setOpen(!open)}>
+                <div className="ai-diff-header-left">
+                    <span className={`ai-diff-icon ai-diff-icon-${diff.change_type}`}>{changeIcon}</span>
+                    <span className="ai-diff-page">Page {diff.page}</span>
+                    <span className="ai-diff-location">{diff.location}</span>
+                    <span className={`badge badge-${diff.change_type}`}>{diff.change_type}</span>
+                    {diff.section && (
+                        <span style={{ color: 'var(--text-tertiary)', fontSize: 12, fontWeight: 500 }}>
+                            {diff.section}
+                        </span>
+                    )}
+                </div>
+                {open ? <ChevronUp size={14} color="var(--text-ghost)" /> : <ChevronDown size={14} color="var(--text-ghost)" />}
+            </div>
+            {open && (
+                <div className="ai-diff-body">
+                    <div className="ai-diff-description">{diff.description}</div>
+                    {(diff.text_in_a || diff.text_in_b) && (
+                        <div className="ai-diff-text-grid">
+                            {diff.text_in_a && (
+                                <div className="ai-diff-text-block removed">
+                                    <div className="ai-diff-text-label">Document A</div>
+                                    <div className="ai-diff-text-content">{diff.text_in_a}</div>
+                                </div>
+                            )}
+                            {diff.text_in_b && (
+                                <div className="ai-diff-text-block added">
+                                    <div className="ai-diff-text-label">Document B</div>
+                                    <div className="ai-diff-text-content">{diff.text_in_b}</div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
 function SimilarityGauge({ value }: { value: number }) {
     const circumference = 2 * Math.PI * 42;
     const offset = circumference - (value / 100) * circumference;
@@ -222,7 +397,7 @@ function SimilarityGauge({ value }: { value: number }) {
    Main Page
    ═══════════════════════════════════════════════════════════════ */
 
-type Tab = 'viewer' | 'summary' | 'paragraphs' | 'bullets' | 'tables' | 'images';
+type Tab = 'ai-analysis' | 'viewer' | 'summary' | 'paragraphs' | 'bullets' | 'formatting' | 'tables' | 'images';
 
 export default function Home() {
     const [file1, setFile1] = useState<File | null>(null);
@@ -233,7 +408,7 @@ export default function Home() {
     const [statusMsg, setStatusMsg] = useState('');
     const [error, setError] = useState('');
     const [result, setResult] = useState<ComparisonResult | null>(null);
-    const [activeTab, setActiveTab] = useState<Tab>('viewer');
+    const [activeTab, setActiveTab] = useState<Tab>('ai-analysis');
 
     const canCompare = file1 && file2 && !loading;
 
@@ -253,7 +428,7 @@ export default function Home() {
             setProgress(100);
             setStatusMsg('');
             setResult(r);
-            setActiveTab('viewer');
+            setActiveTab('ai-analysis');
         } catch (err: unknown) {
             if (axios.isAxiosError(err)) {
                 setError(err.response?.data?.detail || err.message);
@@ -285,12 +460,20 @@ export default function Home() {
     /* ── Derived data ── */
     const changedTextDiffs = result?.text_diffs.filter((d: TextDiff) => d.diff_type !== 'unchanged') || [];
     const changedBulletDiffs = result?.bullet_diffs.filter((d: TextDiff) => d.diff_type !== 'unchanged') || [];
+    const formattingDiffs = [...changedTextDiffs, ...changedBulletDiffs].filter(
+        (d: TextDiff) => (d.style_changes && d.style_changes.length > 0)
+            || (d.layout_changes && d.layout_changes.length > 0)
+    );
+
+    const aiPageDiffs = result?.ai_page_diffs || [];
 
     const tabs: { key: Tab; label: string; icon: React.ReactNode; count?: number }[] = [
+        { key: 'ai-analysis', label: 'AI Analysis', icon: <Zap size={13} />, count: aiPageDiffs.length },
         { key: 'viewer', label: 'Side by Side', icon: <Eye size={13} /> },
         { key: 'summary', label: 'Summary', icon: <ScanSearch size={13} /> },
         { key: 'paragraphs', label: 'Paragraphs', icon: <AlignLeft size={13} />, count: changedTextDiffs.length },
         { key: 'bullets', label: 'Bullets', icon: <List size={13} />, count: changedBulletDiffs.length },
+        { key: 'formatting', label: 'Format/Layout', icon: <Paintbrush size={13} />, count: formattingDiffs.length },
         { key: 'tables', label: 'Tables', icon: <Table2 size={13} />, count: result?.table_diffs.length },
         { key: 'images', label: 'Images', icon: <ImageIcon size={13} />, count: result?.image_diffs.filter((d: ImageDiff) => d.diff_type !== 'unchanged').length },
     ];
@@ -444,6 +627,12 @@ export default function Home() {
                                         </span>
                                     </div>
                                     <div className="stat-item">
+                                        <span className="stat-label"><Paintbrush size={12} /> Format/Layout</span>
+                                        <span className={`stat-value ${formattingDiffs.length > 0 ? 'amber' : 'green'}`}>
+                                            {formattingDiffs.length}
+                                        </span>
+                                    </div>
+                                    <div className="stat-item">
                                         <span className="stat-label"><ImageIcon size={12} /> Images</span>
                                         <span className={`stat-value ${result.image_diffs.filter((d: ImageDiff) => d.diff_type !== 'unchanged').length > 0 ? 'amber' : 'green'}`}>
                                             {result.image_diffs.filter((d: ImageDiff) => d.diff_type !== 'unchanged').length}
@@ -454,6 +643,41 @@ export default function Home() {
 
                             {/* Content area */}
                             <div className="content-area">
+                                {activeTab === 'ai-analysis' && (
+                                    <div style={{ maxWidth: 900 }}>
+                                        <div className="section-heading">
+                                            <Zap size={15} /> Gemini AI Analysis — Page-by-Page Differences
+                                            <span className="badge badge-changed" style={{ marginLeft: 4 }}>{aiPageDiffs.length}</span>
+                                        </div>
+                                        {aiPageDiffs.length === 0
+                                            ? <div className="summary-block" style={{ color: 'var(--text-ghost)' }}>
+                                                No differences detected by AI analysis, or Gemini API key not provided.
+                                            </div>
+                                            : (() => {
+                                                // Group by page for better top-to-bottom display
+                                                const pages = new Map<number, PageDiff[]>();
+                                                aiPageDiffs.forEach((d: PageDiff) => {
+                                                    if (!pages.has(d.page)) pages.set(d.page, []);
+                                                    pages.get(d.page)!.push(d);
+                                                });
+                                                return Array.from(pages.entries()).map(([pageNum, diffs]) => (
+                                                    <div key={pageNum} style={{ marginBottom: 24 }}>
+                                                        <div className="ai-page-group-header">
+                                                            <FileText size={13} />
+                                                            Page {pageNum}
+                                                            <span style={{ color: 'var(--text-ghost)', fontWeight: 400 }}>
+                                                                — {diffs.length} difference{diffs.length !== 1 ? 's' : ''}
+                                                            </span>
+                                                        </div>
+                                                        {diffs.map((d: PageDiff, i: number) => (
+                                                            <AIDiffCard key={`${pageNum}-${i}`} diff={d} index={i} />
+                                                        ))}
+                                                    </div>
+                                                ));
+                                            })()}
+                                    </div>
+                                )}
+
                                 {activeTab === 'viewer' && <SideBySideViewer result={result} />}
 
                                 {activeTab === 'summary' && (
@@ -484,6 +708,18 @@ export default function Home() {
                                         {changedBulletDiffs.length === 0
                                             ? <p style={{ color: 'var(--text-ghost)' }}>No bullet point differences found.</p>
                                             : changedBulletDiffs.map((d: TextDiff, i: number) => <TextDiffCard key={i} diff={d} />)}
+                                    </div>
+                                )}
+
+                                {activeTab === 'formatting' && (
+                                    <div style={{ maxWidth: 900 }}>
+                                        <div className="section-heading">
+                                            <Paintbrush size={15} /> Formatting & Layout Differences
+                                            <span className="badge badge-changed" style={{ marginLeft: 4 }}>{formattingDiffs.length}</span>
+                                        </div>
+                                        {formattingDiffs.length === 0
+                                            ? <p style={{ color: 'var(--text-ghost)' }}>No formatting or spacing differences found.</p>
+                                            : formattingDiffs.map((d: TextDiff, i: number) => <TextDiffCard key={i} diff={d} />)}
                                     </div>
                                 )}
 

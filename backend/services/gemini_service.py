@@ -168,3 +168,111 @@ Respond in JSON format with:
         except Exception as e:
             logger.error(f"Gemini table compare failed: {e}")
             return "Could not analyze table differences."
+
+    def compare_pages_sequentially(
+        self,
+        page_renders_a: List[str],
+        page_renders_b: List[str],
+    ) -> List[Dict[str, Any]]:
+        """
+        Use Gemini Vision to compare PDF pages one-by-one, producing
+        precise, ordered differences from top to bottom of each page.
+        This is the PRIMARY comparison engine.
+        """
+        if not self.enabled:
+            return []
+
+        all_page_diffs: List[Dict[str, Any]] = []
+        max_pages = max(len(page_renders_a), len(page_renders_b))
+
+        for page_idx in range(max_pages):
+            page_num = page_idx + 1
+            img_a = page_renders_a[page_idx] if page_idx < len(page_renders_a) else None
+            img_b = page_renders_b[page_idx] if page_idx < len(page_renders_b) else None
+
+            try:
+                if img_a and img_b:
+                    prompt = (
+                        f"You are comparing page {page_num} of two PDF documents.\n"
+                        "The FIRST image is Document A. The SECOND image is Document B.\n\n"
+                        "Carefully examine both pages and list EVERY meaningful difference "
+                        "from the TOP of the page to the BOTTOM.\n"
+                        "Be very specific: quote the exact text that changed.\n\n"
+                        "Respond ONLY with valid JSON (no markdown fences):\n"
+                        "{\n"
+                        '  "page_identical": false,\n'
+                        '  "differences": [\n'
+                        "    {\n"
+                        '      "location": "top|upper-third|middle|lower-third|bottom",\n'
+                        '      "section": "Section or heading name where the diff occurs",\n'
+                        '      "change_type": "added|removed|changed",\n'
+                        '      "description": "Precise description of what changed",\n'
+                        '      "text_in_a": "Exact text in Document A (null if added)",\n'
+                        '      "text_in_b": "Exact text in Document B (null if removed)"\n'
+                        "    }\n"
+                        "  ]\n"
+                        "}\n\n"
+                        "Rules:\n"
+                        "- Order differences strictly from top of page to bottom\n"
+                        "- If pages are identical set page_identical:true, differences:[]\n"
+                        "- Include text changes, number/data changes, added/removed content\n"
+                        "- Do NOT flag minor whitespace, rendering artifacts, or trivial formatting\n"
+                        "- Quote the actual text values precisely\n"
+                        "- For tables, note which cells or rows changed"
+                    )
+                    parts: list = [prompt, self._b64_to_part(img_a), self._b64_to_part(img_b)]
+
+                elif img_a and not img_b:
+                    prompt = (
+                        f"Page {page_num} exists only in Document A (removed in Document B).\n"
+                        "Summarize this page's content briefly.\n"
+                        'Respond with JSON (no markdown fences): {"page_identical": false, "differences": ['
+                        '{"location": "full-page", "section": "Entire Page", '
+                        '"change_type": "removed", "description": "...", '
+                        '"text_in_a": "brief summary", "text_in_b": null}]}'
+                    )
+                    parts = [prompt, self._b64_to_part(img_a)]
+
+                elif img_b and not img_a:
+                    prompt = (
+                        f"Page {page_num} exists only in Document B (added, not in Document A).\n"
+                        "Summarize this page's content briefly.\n"
+                        'Respond with JSON (no markdown fences): {"page_identical": false, "differences": ['
+                        '{"location": "full-page", "section": "Entire Page", '
+                        '"change_type": "added", "description": "...", '
+                        '"text_in_a": null, "text_in_b": "brief summary"}]}'
+                    )
+                    parts = [prompt, self._b64_to_part(img_b)]
+                else:
+                    continue
+
+                resp = self.client.models.generate_content(
+                    model=self.model, contents=parts
+                )
+
+                import json, re
+                json_match = re.search(r"\{.*\}", resp.text, re.DOTALL)
+                if json_match:
+                    parsed = json.loads(json_match.group())
+                    if not parsed.get("page_identical", False):
+                        for diff in parsed.get("differences", []):
+                            diff["page"] = page_num
+                            all_page_diffs.append(diff)
+                    else:
+                        logger.info(f"Page {page_num}: identical (Gemini)")
+                else:
+                    logger.warning(f"Page {page_num}: could not parse Gemini JSON response")
+
+            except Exception as e:
+                logger.error(f"Gemini page {page_num} comparison failed: {e}")
+                all_page_diffs.append({
+                    "page": page_num,
+                    "location": "unknown",
+                    "section": "Analysis Error",
+                    "change_type": "changed",
+                    "description": f"Could not analyze page {page_num}: {str(e)}",
+                    "text_in_a": None,
+                    "text_in_b": None,
+                })
+
+        return all_page_diffs

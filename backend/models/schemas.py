@@ -17,6 +17,20 @@ class TextDiff(BaseModel):
     diff_type: DiffType
     similarity_score: float
     section_type: str  # "paragraph", "heading", "bullet"
+    style_changes: Optional[List[str]] = None
+    layout_changes: Optional[List[str]] = None
+    position: float = 0.0  # vertical position on page for top-to-bottom ordering
+
+
+class PageDiff(BaseModel):
+    """AI-driven page-by-page difference from Gemini Vision."""
+    page: int
+    location: str  # top, upper-third, middle, lower-third, bottom
+    section: str
+    change_type: str  # added, removed, changed
+    description: str
+    text_in_a: Optional[str] = None
+    text_in_b: Optional[str] = None
 
 
 class TableCellDiff(BaseModel):
@@ -57,6 +71,7 @@ class ComparisonResult(BaseModel):
     table_diffs: List[TableDiff]
     image_diffs: List[ImageDiff]
     bullet_diffs: List[TextDiff]
+    ai_page_diffs: Optional[List[PageDiff]] = None
     page_count_a: int
     page_count_b: int
     page_renders_a: Optional[List[str]] = None
