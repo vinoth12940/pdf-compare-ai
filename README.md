@@ -279,7 +279,8 @@ pdf-compare-ai/
 │
 ├── docs/
 │   ├── api.md                      # Detailed API reference
-│   └── architecture.md             # System architecture + ADRs
+│   ├── architecture.md             # System architecture + ADRs
+│   └── workflow.md                 # End-to-end processing workflow note
 │
 ├── backend/
 │   ├── Dockerfile                   # Python 3.11-slim + Poppler + Tesseract
@@ -526,7 +527,7 @@ The frontend uses a **product-grade app shell** design inspired by Linear, Verce
 
 ### Docker Compose
 
-- Backend health check: `curl http://localhost:8000/health` every 30s
+- Backend health check: Python HTTP probe against `/health` every 30s
 - Frontend depends on backend
 - Both services have `restart: unless-stopped`
 - Backend env file: `./backend/.env`
@@ -539,6 +540,7 @@ The frontend uses a **product-grade app shell** design inspired by Linear, Verce
 |:---|:---|
 | [API Reference](./docs/api.md) | Detailed endpoint specs, request/response schemas, examples |
 | [Architecture](./docs/architecture.md) | System diagram, data flow, and Architecture Decision Records |
+| [Workflow Note](./docs/workflow.md) | Detailed upload-to-result pipeline, OCR flow, deterministic comparison, and Gemini usage |
 | [Changelog](./CHANGELOG.md) | Version history and release notes |
 | [llms.txt](./llms.txt) | AI-friendly project documentation for RAG/crawlers |
 

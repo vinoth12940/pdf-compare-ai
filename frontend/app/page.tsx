@@ -4,11 +4,21 @@ import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import {
     FileText, Upload, CheckCircle, AlertCircle,
-    ChevronDown, ChevronUp, Download, Loader2,
+    ChevronDown, ChevronUp, Download,
     Table2, Image as ImageIcon, List, AlignLeft,
     Key, Eye, ArrowLeft, ArrowRight, ScanSearch, Zap, X, Paintbrush
 } from 'lucide-react';
-import { comparePDFs, ComparisonResult, TextDiff, TableDiff, ImageDiff, PageDiff } from '@/lib/api';
+import {
+    comparePDFs,
+    ComparisonResult,
+    TextDiff,
+    TableDiff,
+    ImageDiff,
+    PageDiff,
+    ViewerRegion,
+    PagePair,
+    BoundingBox,
+} from '@/lib/api';
 import axios from 'axios';
 
 /* ═══════════════════════════════════════════════════════════════
@@ -47,73 +57,203 @@ function FileDropzone({ label, variant, file, onFile }: {
     );
 }
 
+type ViewerMode = 'regions' | 'pixels' | 'clean';
+
+function regionBoxStyle(bbox: BoundingBox) {
+    return {
+        left: `${bbox.x0 * 100}%`,
+        top: `${bbox.y0 * 100}%`,
+        width: `${(bbox.x1 - bbox.x0) * 100}%`,
+        height: `${(bbox.y1 - bbox.y0) * 100}%`,
+    };
+}
+
+function ViewerPage({
+    documentLabel,
+    pageNumber,
+    imageBase64,
+    side,
+    regions,
+}: {
+    documentLabel: string;
+    pageNumber: number | null | undefined;
+    imageBase64?: string;
+    side: 'a' | 'b';
+    regions: ViewerRegion[];
+}) {
+    return (
+        <div className="sbs-panel">
+            <div className="sbs-panel-header">
+                <span className={`sbs-panel-title ${side}`}>{documentLabel}</span>
+                <span className="sbs-panel-page">
+                    {pageNumber ? `Page ${pageNumber}` : 'No paired page'}
+                </span>
+            </div>
+            {imageBase64 ? (
+                <div className="sbs-page-frame">
+                    <div className="sbs-page-canvas">
+                        <img src={`data:image/png;base64,${imageBase64}`} alt={`${documentLabel} page ${pageNumber || '-'}`} />
+                        {regions.length > 0 && (
+                            <div className="sbs-region-layer" aria-hidden="true">
+                                {regions.map((region, index) => {
+                                    const bbox = side === 'a' ? region.bbox_a : region.bbox_b;
+                                    if (!bbox) return null;
+                                    return (
+                                        <div
+                                            key={`${side}-${index}-${region.label}`}
+                                            className={`sbs-region-box ${region.change_type} ${side}`}
+                                            style={regionBoxStyle(bbox)}
+                                            title={region.label}
+                                        >
+                                            <span className="sbs-region-tag">{index + 1}</span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            ) : (
+                <EmptyPage label={pageNumber ? 'No page render available' : 'This page exists only in the other document'} />
+            )}
+        </div>
+    );
+}
+
 function SideBySideViewer({ result }: { result: ComparisonResult }) {
-    const [page, setPage] = useState(0);
-    const [showOverlay, setShowOverlay] = useState(true);
-    const maxPages = Math.max(result.page_count_a, result.page_count_b);
-    const hasOverlay = !!(result.diff_overlay_a?.length || result.diff_overlay_b?.length);
-    const imgA = showOverlay && hasOverlay
-        ? (result.diff_overlay_a?.[page] || result.page_renders_a?.[page])
-        : result.page_renders_a?.[page];
-    const imgB = showOverlay && hasOverlay
-        ? (result.diff_overlay_b?.[page] || result.page_renders_b?.[page])
-        : result.page_renders_b?.[page];
+    const fallbackPairs: PagePair[] = Array.from(
+        { length: Math.max(result.page_count_a, result.page_count_b) },
+        (_, index) => ({
+            slot: index + 1,
+            page_a: index + 1 <= result.page_count_a ? index + 1 : null,
+            page_b: index + 1 <= result.page_count_b ? index + 1 : null,
+            relation: 'matched',
+            similarity_score: 0,
+        }),
+    );
+
+    const pagePairs = result.page_pairs?.length ? result.page_pairs : fallbackPairs;
+    const [pairIndex, setPairIndex] = useState(0);
+    const hasPixelOverlay = !!(result.diff_overlay_a?.length || result.diff_overlay_b?.length);
+    const hasRegionOverlay = !!(result.viewer_regions?.length);
+    const [viewMode, setViewMode] = useState<ViewerMode>(
+        hasRegionOverlay ? 'regions' : hasPixelOverlay ? 'pixels' : 'clean',
+    );
+
+    const activePair = pagePairs[pairIndex] || pagePairs[0];
+    const pageIndexA = activePair?.page_a ? activePair.page_a - 1 : -1;
+    const pageIndexB = activePair?.page_b ? activePair.page_b - 1 : -1;
+    const pairRegions = (result.viewer_regions || []).filter((region: ViewerRegion) =>
+        (activePair?.page_a && region.page_a === activePair.page_a)
+        || (activePair?.page_b && region.page_b === activePair.page_b),
+    );
+    const regionsA = pairRegions.filter((region: ViewerRegion) => region.page_a === activePair?.page_a && region.bbox_a);
+    const regionsB = pairRegions.filter((region: ViewerRegion) => region.page_b === activePair?.page_b && region.bbox_b);
+
+    const imgA = pageIndexA >= 0
+        ? (viewMode === 'pixels'
+            ? (result.diff_overlay_a?.[pageIndexA] || result.page_renders_a?.[pageIndexA])
+            : result.page_renders_a?.[pageIndexA])
+        : undefined;
+    const imgB = pageIndexB >= 0
+        ? (viewMode === 'pixels'
+            ? (result.diff_overlay_b?.[pageIndexB] || result.page_renders_b?.[pageIndexB])
+            : result.page_renders_b?.[pageIndexB])
+        : undefined;
 
     return (
         <div className="sbs-viewer">
             <div className="sbs-header">
-                <button className="btn-icon" disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>
+                <button className="btn-icon" disabled={pairIndex === 0} onClick={() => setPairIndex((value) => Math.max(0, value - 1))}>
                     <ArrowLeft size={14} />
                 </button>
-                <div style={{ display: 'flex', gap: 3 }}>
-                    {Array.from({ length: maxPages }, (_, i) => (
-                        <button key={i} onClick={() => setPage(i)} className={`page-dot ${page === i ? 'active' : ''}`}>
-                            {i + 1}
-                        </button>
-                    ))}
+                <div className="sbs-page-dots">
+                    {pagePairs.map((pair: PagePair, index: number) => {
+                        const diffCount = (result.viewer_regions || []).filter((region: ViewerRegion) =>
+                            (pair.page_a && region.page_a === pair.page_a)
+                            || (pair.page_b && region.page_b === pair.page_b),
+                        ).length;
+                        return (
+                            <button
+                                key={pair.slot}
+                                onClick={() => setPairIndex(index)}
+                                className={`page-dot ${pairIndex === index ? 'active' : ''} ${diffCount > 0 ? 'has-diffs' : ''}`}
+                                title={`Pair ${pair.slot}: A${pair.page_a ?? '-'} ↔ B${pair.page_b ?? '-'}${diffCount > 0 ? ` · ${diffCount} diff regions` : ''}`}
+                            >
+                                {pair.slot}
+                            </button>
+                        );
+                    })}
                 </div>
-                <button className="btn-icon" disabled={page >= maxPages - 1} onClick={() => setPage(p => Math.min(maxPages - 1, p + 1))}>
+                <button className="btn-icon" disabled={pairIndex >= pagePairs.length - 1} onClick={() => setPairIndex((value) => Math.min(pagePairs.length - 1, value + 1))}>
                     <ArrowRight size={14} />
                 </button>
-                <span style={{ color: 'var(--text-ghost)', fontSize: 11, marginLeft: 4, fontFamily: "'Geist Mono', monospace" }}>
-                    {page + 1}/{maxPages}
-                </span>
-                {hasOverlay && (
+                <div className="sbs-pair-meta">
+                    <span>{pairIndex + 1}/{pagePairs.length}</span>
+                    <span>A{activePair?.page_a ?? '-'}</span>
+                    <span>↔</span>
+                    <span>B{activePair?.page_b ?? '-'}</span>
+                </div>
+                <div className="sbs-mode-toggle">
                     <button
-                        onClick={() => setShowOverlay(v => !v)}
-                        style={{
-                            marginLeft: 'auto',
-                            padding: '4px 10px',
-                            fontSize: 11,
-                            fontFamily: "'Geist Mono', monospace",
-                            borderRadius: 6,
-                            border: '1px solid var(--border)',
-                            background: showOverlay ? 'var(--accent)' : 'var(--bg-card)',
-                            color: showOverlay ? '#fff' : 'var(--text-secondary)',
-                            cursor: 'pointer',
-                            transition: 'all 0.15s ease',
-                        }}
+                        className={`sbs-mode-btn ${viewMode === 'regions' ? 'active' : ''}`}
+                        onClick={() => setViewMode('regions')}
+                        disabled={!hasRegionOverlay}
                     >
-                        {showOverlay ? '● Diff Overlay ON' : '○ Diff Overlay OFF'}
+                        Regions
                     </button>
-                )}
+                    <button
+                        className={`sbs-mode-btn ${viewMode === 'pixels' ? 'active' : ''}`}
+                        onClick={() => setViewMode('pixels')}
+                        disabled={!hasPixelOverlay}
+                    >
+                        Pixels
+                    </button>
+                    <button
+                        className={`sbs-mode-btn ${viewMode === 'clean' ? 'active' : ''}`}
+                        onClick={() => setViewMode('clean')}
+                    >
+                        Clean
+                    </button>
+                </div>
             </div>
+            {pairRegions.length > 0 && (
+                <div className="sbs-region-strip">
+                    {pairRegions.slice(0, 5).map((region: ViewerRegion, index: number) => (
+                        <div key={`${region.source}-${index}-${region.label}`} className={`sbs-region-chip ${region.change_type}`}>
+                            <span className="sbs-region-chip-index">{index + 1}</span>
+                            <span>{region.label}</span>
+                        </div>
+                    ))}
+                    {pairRegions.length > 5 && (
+                        <div className="sbs-region-chip more">+{pairRegions.length - 5} more</div>
+                    )}
+                </div>
+            )}
             <div className="sbs-panels">
-                <div className="sbs-panel">
-                    {imgA ? <img src={`data:image/png;base64,${imgA}`} alt={`Doc A page ${page + 1}`} /> : <EmptyPage />}
-                </div>
-                <div className="sbs-panel">
-                    {imgB ? <img src={`data:image/png;base64,${imgB}`} alt={`Doc B page ${page + 1}`} /> : <EmptyPage />}
-                </div>
+                <ViewerPage
+                    documentLabel="Document A"
+                    pageNumber={activePair?.page_a}
+                    imageBase64={imgA}
+                    side="a"
+                    regions={viewMode === 'regions' ? regionsA : []}
+                />
+                <ViewerPage
+                    documentLabel="Document B"
+                    pageNumber={activePair?.page_b}
+                    imageBase64={imgB}
+                    side="b"
+                    regions={viewMode === 'regions' ? regionsB : []}
+                />
             </div>
         </div>
     );
 }
 
-function EmptyPage() {
+function EmptyPage({ label = 'No page render available' }: { label?: string }) {
     return (
         <div style={{ color: 'var(--text-ghost)', fontSize: 12, padding: 40, textAlign: 'center' }}>
-            No page render available
+            {label}
         </div>
     );
 }

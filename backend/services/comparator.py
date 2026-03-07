@@ -1,7 +1,18 @@
 import difflib
 import re
 from typing import List, Dict, Any, Tuple, Optional
-from models.schemas import DiffType, TextDiff, TableDiff, TableCellDiff, ImageDiff, PageDiff, ComparisonResult
+from models.schemas import (
+    DiffType,
+    TextDiff,
+    TableDiff,
+    TableCellDiff,
+    ImageDiff,
+    PageDiff,
+    ComparisonResult,
+    BoundingBox,
+    ViewerRegion,
+    PagePair,
+)
 from services.gemini_service import GeminiService
 import uuid
 import logging
@@ -52,6 +63,70 @@ def _length_ratio(a: str, b: str) -> float:
     if a_len == 0 or b_len == 0:
         return 0.0
     return min(a_len, b_len) / max(a_len, b_len)
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def _item_bbox(item: Optional[Dict[str, Any]]) -> Optional[BoundingBox]:
+    if not item:
+        return None
+
+    page_width = _to_float(item.get("page_width"))
+    page_height = _to_float(item.get("page_height"))
+    x0 = _to_float(item.get("x0"))
+    x1 = _to_float(item.get("x1"))
+    top = _to_float(item.get("top"))
+    bottom = _to_float(item.get("bottom"))
+
+    if not all(v is not None for v in (page_width, page_height, x0, x1, top, bottom)):
+        return None
+    if page_width <= 0 or page_height <= 0 or x1 <= x0 or bottom <= top:
+        return None
+
+    pad_x = min(6.0, page_width * 0.015)
+    pad_y = min(4.0, page_height * 0.01)
+
+    return BoundingBox(
+        x0=round(_clamp01((x0 - pad_x) / page_width), 4),
+        y0=round(_clamp01((top - pad_y) / page_height), 4),
+        x1=round(_clamp01((x1 + pad_x) / page_width), 4),
+        y1=round(_clamp01((bottom + pad_y) / page_height), 4),
+    )
+
+
+def _preview_label(*values: Optional[str], fallback: str = "Difference") -> str:
+    for value in values:
+        text = re.sub(r"\s+", " ", (value or "")).strip()
+        if text:
+            return text[:96] + ("..." if len(text) > 96 else "")
+    return fallback
+
+
+def _page_signatures(data: Dict[str, Any]) -> List[str]:
+    page_count = int(data.get("page_count", 0) or 0)
+    page_text: Dict[int, List[str]] = {page: [] for page in range(1, page_count + 1)}
+
+    for key in ("headings", "paragraphs", "bullets"):
+        for item in data.get(key, []):
+            page = item.get("page")
+            if isinstance(page, int):
+                page_text.setdefault(page, []).append(item.get("text", ""))
+
+    for table in data.get("tables", []):
+        page = table.get("page")
+        if not isinstance(page, int):
+            continue
+        rows = table.get("rows") or []
+        headers = table.get("headers") or []
+        row_text = " ".join(" | ".join(str(cell or "") for cell in row) for row in rows[:3])
+        page_text.setdefault(page, []).append(f"{' '.join(str(cell or '') for cell in headers)} {row_text}")
+
+    return [
+        _normalize_text(" ".join(page_text.get(page, [])))
+        for page in range(1, page_count + 1)
+    ]
 
 
 def _match_score(a_item: Dict, b_item: Dict, key: str = "text") -> float:
@@ -199,6 +274,105 @@ def _match_tables(
     return pairs
 
 
+def _bbox_overlap_score(a_item: Dict[str, Any], b_item: Dict[str, Any]) -> float:
+    x0_a = _to_float(a_item.get("x0"))
+    x1_a = _to_float(a_item.get("x1"))
+    top_a = _to_float(a_item.get("top"))
+    bottom_a = _to_float(a_item.get("bottom"))
+    x0_b = _to_float(b_item.get("x0"))
+    x1_b = _to_float(b_item.get("x1"))
+    top_b = _to_float(b_item.get("top"))
+    bottom_b = _to_float(b_item.get("bottom"))
+
+    if not all(v is not None for v in (x0_a, x1_a, top_a, bottom_a, x0_b, x1_b, top_b, bottom_b)):
+        return 0.0
+
+    inter_w = max(0.0, min(x1_a, x1_b) - max(x0_a, x0_b))
+    inter_h = max(0.0, min(bottom_a, bottom_b) - max(top_a, top_b))
+    intersection = inter_w * inter_h
+
+    area_a = max(0.0, x1_a - x0_a) * max(0.0, bottom_a - top_a)
+    area_b = max(0.0, x1_b - x0_b) * max(0.0, bottom_b - top_b)
+    union = area_a + area_b - intersection
+    if union <= 0:
+        return 0.0
+    return intersection / union
+
+
+def _image_match_score(img_a: Dict[str, Any], img_b: Dict[str, Any]) -> float:
+    source_width_ratio = _length_ratio(str(img_a.get("width", "")), str(img_b.get("width", "")))
+    source_height_ratio = _length_ratio(str(img_a.get("height", "")), str(img_b.get("height", "")))
+    source_size_score = (source_width_ratio + source_height_ratio) / 2.0
+
+    placement_overlap = _bbox_overlap_score(img_a, img_b)
+
+    placement_width_a = (_to_float(img_a.get("x1")) or 0.0) - (_to_float(img_a.get("x0")) or 0.0)
+    placement_width_b = (_to_float(img_b.get("x1")) or 0.0) - (_to_float(img_b.get("x0")) or 0.0)
+    placement_height_a = (_to_float(img_a.get("bottom")) or 0.0) - (_to_float(img_a.get("top")) or 0.0)
+    placement_height_b = (_to_float(img_b.get("bottom")) or 0.0) - (_to_float(img_b.get("top")) or 0.0)
+
+    placement_width_score = _length_ratio(str(max(0.0, placement_width_a)), str(max(0.0, placement_width_b)))
+    placement_height_score = _length_ratio(str(max(0.0, placement_height_a)), str(max(0.0, placement_height_b)))
+    placement_size_score = (placement_width_score + placement_height_score) / 2.0
+
+    x0_a = _to_float(img_a.get("x0"))
+    x1_a = _to_float(img_a.get("x1"))
+    top_a = _to_float(img_a.get("top"))
+    bottom_a = _to_float(img_a.get("bottom"))
+    x0_b = _to_float(img_b.get("x0"))
+    x1_b = _to_float(img_b.get("x1"))
+    top_b = _to_float(img_b.get("top"))
+    bottom_b = _to_float(img_b.get("bottom"))
+    page_width = max(_to_float(img_a.get("page_width")) or 0.0, _to_float(img_b.get("page_width")) or 0.0, 1.0)
+    page_height = max(_to_float(img_a.get("page_height")) or 0.0, _to_float(img_b.get("page_height")) or 0.0, 1.0)
+
+    center_score = 0.0
+    if all(v is not None for v in (x0_a, x1_a, top_a, bottom_a, x0_b, x1_b, top_b, bottom_b)):
+        center_a = ((x0_a + x1_a) / 2.0, (top_a + bottom_a) / 2.0)
+        center_b = ((x0_b + x1_b) / 2.0, (top_b + bottom_b) / 2.0)
+        dx = abs(center_a[0] - center_b[0]) / page_width
+        dy = abs(center_a[1] - center_b[1]) / page_height
+        center_score = max(0.0, 1.0 - ((dx + dy) / 2.0))
+
+    return (
+        (placement_overlap * 0.45)
+        + (center_score * 0.2)
+        + (placement_size_score * 0.2)
+        + (source_size_score * 0.15)
+    )
+
+
+def _match_page_images(
+    images_a: List[Dict[str, Any]],
+    images_b: List[Dict[str, Any]],
+) -> List[Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]]:
+    used_b = set()
+    pairs: List[Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]] = []
+
+    for img_a in images_a:
+        best_score = -1.0
+        best_j = -1
+        for j, img_b in enumerate(images_b):
+            if j in used_b:
+                continue
+            score = _image_match_score(img_a, img_b)
+            if score > best_score:
+                best_score = score
+                best_j = j
+
+        if best_j >= 0 and best_score >= 0.35:
+            pairs.append((img_a, images_b[best_j]))
+            used_b.add(best_j)
+        else:
+            pairs.append((img_a, None))
+
+    for j, img_b in enumerate(images_b):
+        if j not in used_b:
+            pairs.append((None, img_b))
+
+    return pairs
+
+
 class Comparator:
     def __init__(self, gemini: GeminiService):
         self.gemini = gemini
@@ -246,6 +420,8 @@ class Comparator:
                 position = (a_item or b_item or {}).get("top", 0.0)
                 diffs.append(TextDiff(
                     page=page,
+                    page_a=a_item.get("page") if a_item else None,
+                    page_b=b_item.get("page") if b_item else None,
                     content_a=text_a,
                     content_b=text_b,
                     diff_type=diff_type,
@@ -254,6 +430,8 @@ class Comparator:
                     style_changes=style_changes or None,
                     layout_changes=layout_changes or None,
                     position=round(float(position), 2),
+                    bbox_a=_item_bbox(a_item),
+                    bbox_b=_item_bbox(b_item),
                 ))
 
         return diffs, total_pairs, score_sum
@@ -271,6 +449,8 @@ class Comparator:
                 added_rows = tbl_b.get("rows") or tbl_b.get("data") or []
                 diffs.append(TableDiff(
                     page=(tbl_b or {}).get("page", 0),
+                    page_a=None,
+                    page_b=(tbl_b or {}).get("page"),
                     table_index=table_index,
                     headers_a=None,
                     headers_b=_sanitize_list(tbl_b.get("headers")) if tbl_b else None,
@@ -278,6 +458,8 @@ class Comparator:
                     rows_added=len(added_rows) if tbl_b else 0,
                     rows_removed=0,
                     diff_type=DiffType.ADDED,
+                    bbox_a=None,
+                    bbox_b=_item_bbox(tbl_b),
                 ))
                 continue
 
@@ -285,6 +467,8 @@ class Comparator:
                 removed_rows = tbl_a.get("rows") or tbl_a.get("data") or []
                 diffs.append(TableDiff(
                     page=(tbl_a or {}).get("page", 0),
+                    page_a=(tbl_a or {}).get("page"),
+                    page_b=None,
                     table_index=table_index,
                     headers_a=_sanitize_list(tbl_a.get("headers")) if tbl_a else None,
                     headers_b=None,
@@ -292,6 +476,8 @@ class Comparator:
                     rows_added=0,
                     rows_removed=len(removed_rows) if tbl_a else 0,
                     diff_type=DiffType.REMOVED,
+                    bbox_a=_item_bbox(tbl_a),
+                    bbox_b=None,
                 ))
                 continue
 
@@ -365,6 +551,8 @@ class Comparator:
             if has_changes or rows_added or rows_removed:
                 diffs.append(TableDiff(
                     page=tbl_a.get("page", 0),
+                    page_a=tbl_a.get("page"),
+                    page_b=tbl_b.get("page"),
                     table_index=table_index,
                     headers_a=_sanitize_list(tbl_a.get("headers")),
                     headers_b=_sanitize_list(tbl_b.get("headers")),
@@ -372,6 +560,8 @@ class Comparator:
                     rows_added=rows_added,
                     rows_removed=rows_removed,
                     diff_type=DiffType.CHANGED,
+                    bbox_a=_item_bbox(tbl_a),
+                    bbox_b=_item_bbox(tbl_b),
                 ))
 
         return diffs
@@ -379,7 +569,7 @@ class Comparator:
     # ─── Image Comparison ──────────────────────────────────────────────────────
 
     def compare_images(self, images_a: List[Dict], images_b: List[Dict]) -> List[ImageDiff]:
-        """Compare images page by page. Use Gemini Vision where available."""
+        """Compare images page by page using placement-aware matching."""
         diffs = []
         # Group by page
         pages_a: Dict[int, List[Dict]] = {}
@@ -395,12 +585,9 @@ class Comparator:
         for page in all_pages:
             imgs_a = pages_a.get(page, [])
             imgs_b = pages_b.get(page, [])
+            image_pairs = _match_page_images(imgs_a, imgs_b)
 
-            max_imgs = max(len(imgs_a), len(imgs_b))
-            for idx in range(max_imgs):
-                img_a = imgs_a[idx] if idx < len(imgs_a) else None
-                img_b = imgs_b[idx] if idx < len(imgs_b) else None
-
+            for idx, (img_a, img_b) in enumerate(image_pairs):
                 if img_a and img_b:
                     b64_a = img_a.get("data_b64", "")
                     b64_b = img_b.get("data_b64", "")
@@ -418,36 +605,220 @@ class Comparator:
                     diff_type = DiffType.UNCHANGED if ai_result.get("are_same") else DiffType.CHANGED
                     diffs.append(ImageDiff(
                         page=page,
+                        page_a=img_a.get("page"),
+                        page_b=img_b.get("page"),
                         image_index=idx,
                         description_a=desc_a,
                         description_b=desc_b,
                         diff_type=diff_type,
                         ai_analysis=ai_result.get("summary", ""),
+                        bbox_a=_item_bbox(img_a),
+                        bbox_b=_item_bbox(img_b),
                     ))
 
                 elif img_a:
                     desc_a = self.gemini.describe_image(img_a.get("data_b64", ""), f"Document A, page {page}")
                     diffs.append(ImageDiff(
                         page=page,
+                        page_a=img_a.get("page"),
+                        page_b=None,
                         image_index=idx,
                         description_a=desc_a,
                         description_b=None,
                         diff_type=DiffType.REMOVED,
                         ai_analysis=f"Image present only in Document A on page {page}.",
+                        bbox_a=_item_bbox(img_a),
+                        bbox_b=None,
                     ))
 
-                else:
+                elif img_b:
                     desc_b = self.gemini.describe_image(img_b.get("data_b64", ""), f"Document B, page {page}")
                     diffs.append(ImageDiff(
                         page=page,
+                        page_a=None,
+                        page_b=img_b.get("page"),
                         image_index=idx,
                         description_a=None,
                         description_b=desc_b,
                         diff_type=DiffType.ADDED,
                         ai_analysis=f"Image present only in Document B on page {page}.",
+                        bbox_a=None,
+                        bbox_b=_item_bbox(img_b),
                     ))
 
         return diffs
+
+    def align_pages(
+        self,
+        data_a: Dict[str, Any],
+        data_b: Dict[str, Any],
+    ) -> List[PagePair]:
+        signatures_a = _page_signatures(data_a)
+        signatures_b = _page_signatures(data_b)
+        m = len(signatures_a)
+        n = len(signatures_b)
+
+        if m == 0 and n == 0:
+            return []
+
+        insert_cost = 0.35
+        delete_cost = 0.35
+        dp = [[0.0] * (n + 1) for _ in range(m + 1)]
+        backtrack: List[List[Optional[str]]] = [[None] * (n + 1) for _ in range(m + 1)]
+
+        for i in range(1, m + 1):
+            dp[i][0] = i * delete_cost
+            backtrack[i][0] = "delete"
+        for j in range(1, n + 1):
+            dp[0][j] = j * insert_cost
+            backtrack[0][j] = "insert"
+
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                similarity = _similarity(signatures_a[i - 1], signatures_b[j - 1])
+                match_cost = dp[i - 1][j - 1] + (1.0 - similarity)
+                delete_path = dp[i - 1][j] + delete_cost
+                insert_path = dp[i][j - 1] + insert_cost
+
+                best_cost = match_cost
+                best_op = "match"
+                if delete_path < best_cost:
+                    best_cost = delete_path
+                    best_op = "delete"
+                if insert_path < best_cost:
+                    best_cost = insert_path
+                    best_op = "insert"
+
+                dp[i][j] = best_cost
+                backtrack[i][j] = best_op
+
+        pairs: List[PagePair] = []
+        i = m
+        j = n
+        while i > 0 or j > 0:
+            op = backtrack[i][j]
+            if op == "match" and i > 0 and j > 0:
+                similarity = _similarity(signatures_a[i - 1], signatures_b[j - 1])
+                pairs.append(PagePair(
+                    slot=0,
+                    page_a=i,
+                    page_b=j,
+                    relation="matched",
+                    similarity_score=round(similarity, 3),
+                ))
+                i -= 1
+                j -= 1
+            elif op == "delete" and i > 0:
+                pairs.append(PagePair(
+                    slot=0,
+                    page_a=i,
+                    page_b=None,
+                    relation="removed",
+                    similarity_score=0.0,
+                ))
+                i -= 1
+            elif op == "insert" and j > 0:
+                pairs.append(PagePair(
+                    slot=0,
+                    page_a=None,
+                    page_b=j,
+                    relation="added",
+                    similarity_score=0.0,
+                ))
+                j -= 1
+            elif i > 0:
+                pairs.append(PagePair(
+                    slot=0,
+                    page_a=i,
+                    page_b=None,
+                    relation="removed",
+                    similarity_score=0.0,
+                ))
+                i -= 1
+            elif j > 0:
+                pairs.append(PagePair(
+                    slot=0,
+                    page_a=None,
+                    page_b=j,
+                    relation="added",
+                    similarity_score=0.0,
+                ))
+                j -= 1
+
+        pairs.reverse()
+        for slot, pair in enumerate(pairs, 1):
+            pair.slot = slot
+        return pairs
+
+    def build_viewer_regions(
+        self,
+        text_diffs: List[TextDiff],
+        bullet_diffs: List[TextDiff],
+        table_diffs: List[TableDiff],
+        image_diffs: List[ImageDiff],
+    ) -> List[ViewerRegion]:
+        regions: List[ViewerRegion] = []
+
+        for diff in text_diffs + bullet_diffs:
+            if diff.diff_type == DiffType.UNCHANGED:
+                continue
+            if not diff.bbox_a and not diff.bbox_b:
+                continue
+            regions.append(ViewerRegion(
+                page_a=diff.page_a,
+                page_b=diff.page_b,
+                bbox_a=diff.bbox_a,
+                bbox_b=diff.bbox_b,
+                change_type=diff.diff_type,
+                source=diff.section_type,
+                label=_preview_label(diff.content_b, diff.content_a, fallback=diff.section_type.title()),
+                similarity_score=diff.similarity_score,
+            ))
+
+        for diff in table_diffs:
+            if diff.diff_type == DiffType.UNCHANGED:
+                continue
+            if not diff.bbox_a and not diff.bbox_b:
+                continue
+            regions.append(ViewerRegion(
+                page_a=diff.page_a,
+                page_b=diff.page_b,
+                bbox_a=diff.bbox_a,
+                bbox_b=diff.bbox_b,
+                change_type=diff.diff_type,
+                source="table",
+                label=_preview_label(
+                    " ".join(diff.headers_b or []),
+                    " ".join(diff.headers_a or []),
+                    fallback=f"Table {diff.table_index + 1}",
+                ),
+                similarity_score=None,
+            ))
+
+        for diff in image_diffs:
+            if diff.diff_type == DiffType.UNCHANGED:
+                continue
+            if not diff.bbox_a and not diff.bbox_b:
+                continue
+            regions.append(ViewerRegion(
+                page_a=diff.page_a,
+                page_b=diff.page_b,
+                bbox_a=diff.bbox_a,
+                bbox_b=diff.bbox_b,
+                change_type=diff.diff_type,
+                source="image",
+                label=_preview_label(diff.description_b, diff.description_a, fallback="Image"),
+                similarity_score=None,
+            ))
+
+        regions.sort(
+            key=lambda region: (
+                region.page_a if region.page_a is not None else 10**6,
+                region.page_b if region.page_b is not None else 10**6,
+                region.bbox_a.y0 if region.bbox_a else (region.bbox_b.y0 if region.bbox_b else 1.0),
+            )
+        )
+        return regions
 
     # ─── Full Comparison ───────────────────────────────────────────────────────
 
@@ -473,6 +844,7 @@ class Comparator:
             data_a.get("bullets", []), data_b.get("bullets", []), "bullet"
         )
         all_text_diffs = para_diffs + heading_diffs
+        page_pairs = self.align_pages(data_a, data_b)
 
         # Sort text and bullet diffs by page + vertical position (top-to-bottom)
         all_text_diffs.sort(key=lambda d: (d.page, d.position))
@@ -487,6 +859,7 @@ class Comparator:
         image_diffs = self.compare_images(
             data_a.get("images", []), data_b.get("images", [])
         )
+        viewer_regions = self.build_viewer_regions(all_text_diffs, bullet_diffs, table_diffs, image_diffs)
 
         # --- Similarity score ---
         # Weighted average of all individual text similarity scores (including unchanged)
@@ -570,5 +943,7 @@ class Comparator:
             ai_page_diffs=ai_page_diffs if ai_page_diffs else None,
             page_count_a=data_a.get("page_count", 0),
             page_count_b=data_b.get("page_count", 0),
+            viewer_regions=viewer_regions or None,
+            page_pairs=page_pairs or None,
             stats=stats,
         )

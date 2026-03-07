@@ -8,6 +8,7 @@ from pdf2image import convert_from_path
 from PIL import Image, ImageFilter
 import pytesseract
 import logging
+import pypdfium2 as pdfium
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +28,9 @@ def is_bullet_line(text: str) -> bool:
     normalized = normalize_extracted_text(stripped)
     bullet_patterns = [
         r"^\(cid:\d+\)\s*",  # Common bullet glyph encoding from pdfplumber
-        r"^[•●○◦▪▸►▻‣⁃]\s",
-        r"^[-–—]\s",
-        r"^\*\s",
+        r"^[•●○◦▪▸►▻‣⁃]\s*",
+        r"^[-–—]\s*",
+        r"^\*\s*",
         r"^\d+[.)]\s",
         r"^[a-zA-Z][.)]\s",
         r"^\([a-zA-Z0-9]+\)\s",
@@ -59,6 +60,7 @@ def is_heading(
     """Detect if a line looks like a heading."""
     stripped = normalize_extracted_text(text)
     words = stripped.split()
+    word_count = len(words)
 
     if is_bullet_line(stripped):
         return False
@@ -66,24 +68,39 @@ def is_heading(
         return False
     if _looks_like_table_row(stripped):
         return False
-    if len(words) < 2 or len(words) > 14:
+    if word_count == 0 or word_count > 14:
         return False
 
     max_font = max(font_sizes) if font_sizes else 0.0
+    contains_contact_like_content = bool(
+        re.search(r"(@|www\.|https?://|\b\d{5}\b|\(\d{3}\)\s*\d{3}-\d{4})", stripped, re.IGNORECASE)
+    )
+    has_inline_punctuation = (":" in stripped) or ("," in stripped)
+
+    if contains_contact_like_content and max_font < 12.5:
+        return False
 
     # Strong heading signals
-    if max_font >= 13.0:
+    if max_font >= 13.0 and word_count <= 14:
         return True
-    if stripped.isupper() and len(words) <= 12:
+    if stripped.isupper() and 1 <= word_count <= 12:
         return True
-    if is_bold and len(words) <= 12 and not stripped.endswith((".", ",", ";", ":", "?", "!")):
+    if (
+        is_bold
+        and 1 <= word_count <= 12
+        and not stripped.endswith((".", ",", ";", ":", "?", "!"))
+        and not has_inline_punctuation
+    ):
         return True
 
-    # Fallback: short title-like line without terminal punctuation.
+    # Fallback: title-like line with a modest font bump over body text.
     if (
+        max_font >= 11.5
+        and
         not stripped.endswith((".", ",", ";", ":", "?", "!"))
-        and 2 <= len(words) <= 10
+        and 1 <= word_count <= 6
         and stripped[0].isupper()
+        and not has_inline_punctuation
         and not re.search(r"\d{4,}", stripped)
     ):
         return True
@@ -112,6 +129,7 @@ class PDFExtractor:
                 return default
 
         page_width = _to_float(getattr(page, "width", 0.0), 0.0)
+        page_height = _to_float(getattr(page, "height", 0.0), 0.0)
 
         try:
             words = page.extract_words(
@@ -142,6 +160,7 @@ class PDFExtractor:
                     "is_bold": False,
                     "is_italic": False,
                     "page_width": page_width,
+                    "page_height": page_height,
                 })
                 y_cursor += 12.0
             return fallback_lines
@@ -188,6 +207,7 @@ class PDFExtractor:
                 ),
                 "is_italic": any(("italic" in name) or ("oblique" in name) for name in fontnames),
                 "page_width": page_width,
+                "page_height": page_height,
             }
 
         lines: List[Dict[str, Any]] = []
@@ -220,6 +240,244 @@ class PDFExtractor:
 
         lines.sort(key=lambda line: (line["top"], line["x0"]))
         return lines
+
+    @staticmethod
+    def _line_overlaps_bbox(line: Dict[str, Any], bbox: Tuple[float, float, float, float], tolerance: float = 2.0) -> bool:
+        x0, top, x1, bottom = bbox
+        line_top = float(line.get("top", 0.0) or 0.0)
+        line_bottom = float(line.get("bottom", line_top) or line_top)
+        line_x0 = float(line.get("x0", 0.0) or 0.0)
+        line_x1 = float(line.get("x1", line_x0) or line_x0)
+
+        vertical_overlap = min(line_bottom, bottom) - max(line_top, top)
+        horizontal_overlap = min(line_x1, x1) - max(line_x0, x0)
+        return vertical_overlap > -tolerance and horizontal_overlap > -tolerance
+
+    @staticmethod
+    def _should_split_paragraph(current_lines: List[Dict[str, Any]], next_line: Dict[str, Any]) -> bool:
+        if not current_lines:
+            return False
+
+        prev_line = current_lines[-1]
+        prev_height = max(1.0, float(prev_line.get("bottom", 0.0) or 0.0) - float(prev_line.get("top", 0.0) or 0.0))
+        next_gap = float(next_line.get("prev_gap", 0.0) or 0.0)
+
+        if next_gap > max(12.0, prev_height * 1.6):
+            return True
+
+        prev_indent = float(prev_line.get("x0", 0.0) or 0.0)
+        next_indent = float(next_line.get("x0", 0.0) or 0.0)
+        if abs(next_indent - prev_indent) >= 18.0 and next_gap >= 6.0:
+            return True
+
+        prev_font = prev_line.get("font_size")
+        next_font = next_line.get("font_size")
+        if prev_font is not None and next_font is not None and abs(float(next_font) - float(prev_font)) >= 1.5 and next_gap >= 4.0:
+            return True
+
+        if bool(prev_line.get("is_bold")) != bool(next_line.get("is_bold")) and next_gap >= 6.0:
+            return True
+
+        return False
+
+    @staticmethod
+    def _render_pdf_to_images(pdf_path: str, dpi: int = 150) -> List[Image.Image]:
+        try:
+            return convert_from_path(pdf_path, dpi=dpi, fmt="png")
+        except Exception as exc:
+            logger.warning(f"pdf2image render failed, falling back to PDFium: {exc}")
+
+        images: List[Image.Image] = []
+        try:
+            doc = pdfium.PdfDocument(pdf_path)
+            scale = dpi / 72.0
+            for page_index in range(len(doc)):
+                page = doc[page_index]
+                bitmap = page.render(scale=scale)
+                images.append(bitmap.to_pil().convert("RGB"))
+            return images
+        except Exception as exc:
+            logger.error(f"PDFium render failed: {exc}")
+            return []
+
+    @staticmethod
+    def _extract_ocr_lines(img: Image.Image, dpi: int = 200) -> List[Dict[str, Any]]:
+        scale = 72.0 / float(dpi)
+        page_width = round(img.width * scale, 2)
+        page_height = round(img.height * scale, 2)
+
+        try:
+            data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+        except Exception as exc:
+            logger.error(f"OCR TSV extraction failed: {exc}")
+            return []
+
+        line_groups: Dict[Tuple[int, int, int], List[Dict[str, Any]]] = {}
+        total_items = len(data.get("text", []))
+        for idx in range(total_items):
+            raw_text = data["text"][idx]
+            text = normalize_extracted_text(raw_text)
+            if not text:
+                continue
+
+            conf_raw = data.get("conf", ["-1"] * total_items)[idx]
+            try:
+                confidence = float(conf_raw)
+            except Exception:
+                confidence = -1.0
+            if confidence < 0:
+                continue
+
+            key = (
+                int(data.get("block_num", [0] * total_items)[idx] or 0),
+                int(data.get("par_num", [0] * total_items)[idx] or 0),
+                int(data.get("line_num", [0] * total_items)[idx] or 0),
+            )
+            left = float(data.get("left", [0] * total_items)[idx] or 0)
+            top = float(data.get("top", [0] * total_items)[idx] or 0)
+            width = float(data.get("width", [0] * total_items)[idx] or 0)
+            height = float(data.get("height", [0] * total_items)[idx] or 0)
+
+            line_groups.setdefault(key, []).append({
+                "text": text,
+                "x0": round(left * scale, 2),
+                "x1": round((left + width) * scale, 2),
+                "top": round(top * scale, 2),
+                "bottom": round((top + height) * scale, 2),
+                "font_size": round(height * scale, 2),
+                "confidence": confidence,
+            })
+
+        lines: List[Dict[str, Any]] = []
+        for words in line_groups.values():
+            if not words:
+                continue
+            words.sort(key=lambda word: word["x0"])
+            line_text = normalize_extracted_text(" ".join(word["text"] for word in words))
+            if not line_text:
+                continue
+
+            font_sizes = [word["font_size"] for word in words if word["font_size"] > 0]
+            lines.append({
+                "text": line_text,
+                "x0": min(word["x0"] for word in words),
+                "x1": max(word["x1"] for word in words),
+                "top": min(word["top"] for word in words),
+                "bottom": max(word["bottom"] for word in words),
+                "font_size": round(sum(font_sizes) / len(font_sizes), 2) if font_sizes else None,
+                "is_bold": False,
+                "is_italic": False,
+                "page_width": page_width,
+                "page_height": page_height,
+            })
+
+        lines.sort(key=lambda line: (line["top"], line["x0"]))
+        return lines
+
+    def _classify_lines(
+        self,
+        lines: List[Dict[str, Any]],
+        page_num: int,
+        result: Dict[str, Any],
+    ) -> None:
+        if not lines:
+            return
+
+        current_paragraph_lines: List[Dict[str, Any]] = []
+        prev_bottom: Optional[float] = None
+
+        def flush_paragraph() -> None:
+            nonlocal current_paragraph_lines
+            if not current_paragraph_lines:
+                return
+
+            para_text = normalize_extracted_text(
+                " ".join(line["text"] for line in current_paragraph_lines)
+            )
+            font_sizes = [
+                float(line["font_size"]) for line in current_paragraph_lines
+                if line.get("font_size") is not None
+            ]
+            result["paragraphs"].append({
+                "page": page_num,
+                "text": para_text,
+                "font_size": round(sum(font_sizes) / len(font_sizes), 2) if font_sizes else None,
+                "is_bold": any(bool(line.get("is_bold")) for line in current_paragraph_lines),
+                "is_italic": any(bool(line.get("is_italic")) for line in current_paragraph_lines),
+                "indent": round(min(float(line.get("x0", 0.0) or 0.0) for line in current_paragraph_lines), 2),
+                "x0": round(min(float(line.get("x0", 0.0) or 0.0) for line in current_paragraph_lines), 2),
+                "x1": round(max(float(line.get("x1", 0.0) or 0.0) for line in current_paragraph_lines), 2),
+                "top": round(float(current_paragraph_lines[0].get("top", 0.0) or 0.0), 2),
+                "bottom": round(float(current_paragraph_lines[-1].get("bottom", 0.0) or 0.0), 2),
+                "prev_gap": round(float(current_paragraph_lines[0].get("prev_gap", 0.0) or 0.0), 2),
+                "line_count": len(current_paragraph_lines),
+                "page_width": float(current_paragraph_lines[0].get("page_width", 0.0) or 0.0),
+                "page_height": float(current_paragraph_lines[0].get("page_height", 0.0) or 0.0),
+            })
+            current_paragraph_lines = []
+
+        for line in lines:
+            text = normalize_extracted_text(line.get("text", ""))
+            if not text:
+                continue
+
+            top = float(line.get("top", 0.0) or 0.0)
+            bottom = float(line.get("bottom", top) or top)
+            line_gap = max(0.0, top - prev_bottom) if prev_bottom is not None else 0.0
+            prev_bottom = max(bottom, top)
+
+            line_item = {
+                **line,
+                "text": text,
+                "prev_gap": round(line_gap, 2),
+            }
+
+            line_font_sizes = (
+                [float(line_item["font_size"])]
+                if line_item.get("font_size") is not None else None
+            )
+            line_is_bold = bool(line_item.get("is_bold"))
+
+            if is_bullet_line(text):
+                flush_paragraph()
+                result["bullets"].append({
+                    "page": page_num,
+                    "text": text,
+                    "font_size": line_item.get("font_size"),
+                    "is_bold": line_is_bold,
+                    "is_italic": bool(line_item.get("is_italic")),
+                    "indent": round(float(line_item.get("x0", 0.0) or 0.0), 2),
+                    "x0": round(float(line_item.get("x0", 0.0) or 0.0), 2),
+                    "x1": round(float(line_item.get("x1", 0.0) or 0.0), 2),
+                    "top": round(float(line_item.get("top", 0.0) or 0.0), 2),
+                    "bottom": round(float(line_item.get("bottom", 0.0) or 0.0), 2),
+                    "prev_gap": line_item.get("prev_gap", 0.0),
+                    "page_width": float(line_item.get("page_width", 0.0) or 0.0),
+                    "page_height": float(line_item.get("page_height", 0.0) or 0.0),
+                })
+            elif is_heading(text, font_sizes=line_font_sizes, is_bold=line_is_bold):
+                flush_paragraph()
+                result["headings"].append({
+                    "page": page_num,
+                    "text": text,
+                    "font_size": line_item.get("font_size"),
+                    "is_bold": line_is_bold,
+                    "is_italic": bool(line_item.get("is_italic")),
+                    "indent": round(float(line_item.get("x0", 0.0) or 0.0), 2),
+                    "x0": round(float(line_item.get("x0", 0.0) or 0.0), 2),
+                    "x1": round(float(line_item.get("x1", 0.0) or 0.0), 2),
+                    "top": round(float(line_item.get("top", 0.0) or 0.0), 2),
+                    "bottom": round(float(line_item.get("bottom", 0.0) or 0.0), 2),
+                    "prev_gap": line_item.get("prev_gap", 0.0),
+                    "page_width": float(line_item.get("page_width", 0.0) or 0.0),
+                    "page_height": float(line_item.get("page_height", 0.0) or 0.0),
+                })
+            else:
+                if self._should_split_paragraph(current_paragraph_lines, line_item):
+                    flush_paragraph()
+                current_paragraph_lines.append(line_item)
+
+        flush_paragraph()
 
     def extract_all(self, pdf_path: str) -> Dict[str, Any]:
         """
@@ -258,107 +516,43 @@ class PDFExtractor:
                 total_text_chars = 0
 
                 for page_num, page in enumerate(pdf.pages, 1):
-                    # Tables
-                    tables = page.extract_tables()
+                    page_width = float(getattr(page, "width", 0.0) or 0.0)
+                    page_height = float(getattr(page, "height", 0.0) or 0.0)
+
+                    # Tables: prefer finder API so we retain geometry for viewer highlights.
+                    table_bboxes: List[Tuple[float, float, float, float]] = []
+                    try:
+                        tables = page.find_tables()
+                    except Exception:
+                        tables = []
+
                     for tbl_idx, table in enumerate(tables):
-                        if table:
+                        extracted = table.extract() if table else []
+                        if extracted:
+                            x0, top, x1, bottom = table.bbox
+                            table_bboxes.append((float(x0), float(top), float(x1), float(bottom)))
                             result["tables"].append({
                                 "page": page_num,
                                 "table_index": tbl_idx,
-                                "data": table,
-                                "headers": table[0] if table else [],
-                                "rows": table[1:] if len(table) > 1 else [],
+                                "data": extracted,
+                                "headers": extracted[0] if extracted else [],
+                                "rows": extracted[1:] if len(extracted) > 1 else [],
+                                "x0": round(float(x0), 2),
+                                "x1": round(float(x1), 2),
+                                "top": round(float(top), 2),
+                                "bottom": round(float(bottom), 2),
+                                "page_width": page_width,
+                                "page_height": page_height,
                             })
 
                     # Text classification with style/layout metadata.
                     lines = self._extract_page_lines(page)
+                    lines = [
+                        line for line in lines
+                        if not any(self._line_overlaps_bbox(line, bbox) for bbox in table_bboxes)
+                    ]
                     total_text_chars += sum(len((line.get("text") or "").strip()) for line in lines)
-
-                    if lines:
-                        current_paragraph_lines: List[Dict[str, Any]] = []
-                        prev_bottom: Optional[float] = None
-
-                        def flush_paragraph() -> None:
-                            nonlocal current_paragraph_lines
-                            if not current_paragraph_lines:
-                                return
-
-                            para_text = normalize_extracted_text(
-                                " ".join(line["text"] for line in current_paragraph_lines)
-                            )
-                            font_sizes = [
-                                float(line["font_size"]) for line in current_paragraph_lines
-                                if line.get("font_size") is not None
-                            ]
-                            result["paragraphs"].append({
-                                "page": page_num,
-                                "text": para_text,
-                                "font_size": round(sum(font_sizes) / len(font_sizes), 2) if font_sizes else None,
-                                "is_bold": any(bool(line.get("is_bold")) for line in current_paragraph_lines),
-                                "is_italic": any(bool(line.get("is_italic")) for line in current_paragraph_lines),
-                                "indent": round(min(float(line.get("x0", 0.0) or 0.0) for line in current_paragraph_lines), 2),
-                                "top": round(float(current_paragraph_lines[0].get("top", 0.0) or 0.0), 2),
-                                "bottom": round(float(current_paragraph_lines[-1].get("bottom", 0.0) or 0.0), 2),
-                                "prev_gap": round(float(current_paragraph_lines[0].get("prev_gap", 0.0) or 0.0), 2),
-                                "line_count": len(current_paragraph_lines),
-                                "page_width": float(current_paragraph_lines[0].get("page_width", 0.0) or 0.0),
-                            })
-                            current_paragraph_lines = []
-
-                        for line in lines:
-                            text = normalize_extracted_text(line.get("text", ""))
-                            if not text:
-                                continue
-
-                            top = float(line.get("top", 0.0) or 0.0)
-                            bottom = float(line.get("bottom", top) or top)
-                            line_gap = max(0.0, top - prev_bottom) if prev_bottom is not None else 0.0
-                            prev_bottom = max(bottom, top)
-
-                            line_item = {
-                                **line,
-                                "text": text,
-                                "prev_gap": round(line_gap, 2),
-                            }
-
-                            line_font_sizes = (
-                                [float(line_item["font_size"])]
-                                if line_item.get("font_size") is not None else None
-                            )
-                            line_is_bold = bool(line_item.get("is_bold"))
-
-                            if is_bullet_line(text):
-                                flush_paragraph()
-                                result["bullets"].append({
-                                    "page": page_num,
-                                    "text": text,
-                                    "font_size": line_item.get("font_size"),
-                                    "is_bold": line_is_bold,
-                                    "is_italic": bool(line_item.get("is_italic")),
-                                    "indent": round(float(line_item.get("x0", 0.0) or 0.0), 2),
-                                    "top": round(float(line_item.get("top", 0.0) or 0.0), 2),
-                                    "bottom": round(float(line_item.get("bottom", 0.0) or 0.0), 2),
-                                    "prev_gap": line_item.get("prev_gap", 0.0),
-                                    "page_width": float(line_item.get("page_width", 0.0) or 0.0),
-                                })
-                            elif is_heading(text, font_sizes=line_font_sizes, is_bold=line_is_bold):
-                                flush_paragraph()
-                                result["headings"].append({
-                                    "page": page_num,
-                                    "text": text,
-                                    "font_size": line_item.get("font_size"),
-                                    "is_bold": line_is_bold,
-                                    "is_italic": bool(line_item.get("is_italic")),
-                                    "indent": round(float(line_item.get("x0", 0.0) or 0.0), 2),
-                                    "top": round(float(line_item.get("top", 0.0) or 0.0), 2),
-                                    "bottom": round(float(line_item.get("bottom", 0.0) or 0.0), 2),
-                                    "prev_gap": line_item.get("prev_gap", 0.0),
-                                    "page_width": float(line_item.get("page_width", 0.0) or 0.0),
-                                })
-                            else:
-                                current_paragraph_lines.append(line_item)
-
-                        flush_paragraph()
+                    self._classify_lines(lines, page_num, result)
 
                 # If very little text extracted → likely scanned
                 if total_text_chars < 50 * result["page_count"] and self.ocr_available:
@@ -385,132 +579,54 @@ class PDFExtractor:
     def _run_ocr(self, pdf_path: str, result: Dict[str, Any]) -> Dict[str, Any]:
         """Run OCR on scanned/image-only PDFs."""
         try:
-            images = convert_from_path(pdf_path, dpi=200)
+            ocr_dpi = 200
+            images = self._render_pdf_to_images(pdf_path, dpi=ocr_dpi)
             result["page_count"] = len(images)
 
             for page_num, img in enumerate(images, 1):
-                ocr_text = pytesseract.image_to_string(img)
-                lines = ocr_text.split("\n")
-                para_lines = []
-
-                for line in lines:
-                    stripped = normalize_extracted_text(line)
-                    if not stripped:
-                        if para_lines:
-                            result["paragraphs"].append({
-                                "page": page_num,
-                                "text": normalize_extracted_text(" ".join(para_lines)),
-                                "ocr": True,
-                                "font_size": None,
-                                "is_bold": False,
-                                "is_italic": False,
-                                "indent": 0.0,
-                                "top": 0.0,
-                                "bottom": 0.0,
-                                "prev_gap": 0.0,
-                                "page_width": 0.0,
-                            })
-                            para_lines = []
-                        continue
-
-                    if is_bullet_line(stripped):
-                        if para_lines:
-                            result["paragraphs"].append({
-                                "page": page_num,
-                                "text": normalize_extracted_text(" ".join(para_lines)),
-                                "ocr": True,
-                                "font_size": None,
-                                "is_bold": False,
-                                "is_italic": False,
-                                "indent": 0.0,
-                                "top": 0.0,
-                                "bottom": 0.0,
-                                "prev_gap": 0.0,
-                                "page_width": 0.0,
-                            })
-                            para_lines = []
-                        result["bullets"].append({
-                            "page": page_num,
-                            "text": stripped,
-                            "ocr": True,
-                            "font_size": None,
-                            "is_bold": False,
-                            "is_italic": False,
-                            "indent": 0.0,
-                            "top": 0.0,
-                            "bottom": 0.0,
-                            "prev_gap": 0.0,
-                            "page_width": 0.0,
-                        })
-                    elif is_heading(stripped):
-                        if para_lines:
-                            result["paragraphs"].append({
-                                "page": page_num,
-                                "text": normalize_extracted_text(" ".join(para_lines)),
-                                "ocr": True,
-                                "font_size": None,
-                                "is_bold": False,
-                                "is_italic": False,
-                                "indent": 0.0,
-                                "top": 0.0,
-                                "bottom": 0.0,
-                                "prev_gap": 0.0,
-                                "page_width": 0.0,
-                            })
-                            para_lines = []
-                        result["headings"].append({
-                            "page": page_num,
-                            "text": stripped,
-                            "ocr": True,
-                            "font_size": None,
-                            "is_bold": False,
-                            "is_italic": False,
-                            "indent": 0.0,
-                            "top": 0.0,
-                            "bottom": 0.0,
-                            "prev_gap": 0.0,
-                            "page_width": 0.0,
-                        })
-                    else:
-                        para_lines.append(stripped)
-
-                if para_lines:
-                    result["paragraphs"].append({
-                        "page": page_num,
-                        "text": normalize_extracted_text(" ".join(para_lines)),
-                        "ocr": True,
-                        "font_size": None,
-                        "is_bold": False,
-                        "is_italic": False,
-                        "indent": 0.0,
-                        "top": 0.0,
-                        "bottom": 0.0,
-                        "prev_gap": 0.0,
-                        "page_width": 0.0,
-                    })
+                lines = self._extract_ocr_lines(img, dpi=ocr_dpi)
+                self._classify_lines(lines, page_num, result)
 
         except Exception as e:
             logger.error(f"OCR failed: {e}")
 
         return result
 
-    def _pdf_image_to_png_b64(self, xobject, width: int, height: int) -> Optional[str]:
-        """Convert a raw PDF XObject image to valid PNG base64.
+    @staticmethod
+    def _stream_value(stream_obj: Any, key: str, default: Any = None) -> Any:
+        if hasattr(stream_obj, "get"):
+            try:
+                return stream_obj.get(key, default)
+            except Exception:
+                pass
+
+        attrs = getattr(stream_obj, "attrs", None)
+        if isinstance(attrs, dict):
+            return attrs.get(key, default)
+        return default
+
+    def _pdf_image_to_png_b64(self, stream_obj: Any, width: int, height: int) -> Optional[str]:
+        """Convert a raw PDF image stream to valid PNG base64.
         
         PDF images store raw byte streams (JPEG, raw RGB, CMYK, etc.)
         that are NOT valid PNG/JPEG files on their own. This method
         decodes them into PIL Images and re-encodes as PNG.
         """
         try:
-            data = xobject.get_data()
-            color_space = str(xobject.get("/ColorSpace", "/DeviceRGB"))
-            bits_per_component = int(xobject.get("/BitsPerComponent", 8))
-            filt = xobject.get("/Filter", "")
+            if not hasattr(stream_obj, "get_data"):
+                return None
+
+            data = stream_obj.get_data()
+            color_space = str(self._stream_value(stream_obj, "/ColorSpace", self._stream_value(stream_obj, "ColorSpace", "/DeviceRGB")))
+            bits_per_component = int(self._stream_value(stream_obj, "/BitsPerComponent", self._stream_value(stream_obj, "BitsPerComponent", 8)))
+            filt = self._stream_value(stream_obj, "/Filter", self._stream_value(stream_obj, "Filter", ""))
 
             # If it's DCTDecode (JPEG), the data IS valid JPEG
-            if "/DCTDecode" in str(filt):
+            filter_str = str(filt)
+
+            if "DCTDecode" in filter_str:
                 img = Image.open(io.BytesIO(data))
-            elif "/FlateDecode" in str(filt) or not filt:
+            elif "FlateDecode" in filter_str or not filt:
                 # Raw pixel data — need to reconstruct the image
                 if "CMYK" in color_space:
                     mode = "CMYK"
@@ -768,14 +884,56 @@ class PDFExtractor:
 
 
     def _extract_images(self, pdf_path: str) -> List[Dict[str, Any]]:
-        """Extract images from PDF as valid base64 PNG strings."""
+        """Extract images with placement boxes as valid base64 PNG strings."""
         images = []
         try:
-            reader = pypdf.PdfReader(pdf_path)
-            for page_num, page in enumerate(reader.pages, 1):
-                if "/Resources" in page and "/XObject" in page.get("/Resources", {}):
-                    xobjects = page["/Resources"]["/XObject"]
-                    if xobjects:
+            with pdfplumber.open(pdf_path) as pdf:
+                for page_num, page in enumerate(pdf.pages, 1):
+                    page_width = float(getattr(page, "width", 0.0) or 0.0)
+                    page_height = float(getattr(page, "height", 0.0) or 0.0)
+                    page_images = page.images or []
+
+                    for image_index, image_info in enumerate(page_images):
+                        try:
+                            stream = image_info.get("stream")
+                            if not stream:
+                                continue
+
+                            srcsize = image_info.get("srcsize") or (0, 0)
+                            width = int(srcsize[0] or self._stream_value(stream, "Width", 0) or 0)
+                            height = int(srcsize[1] or self._stream_value(stream, "Height", 0) or 0)
+                            if width <= 20 or height <= 20:
+                                continue
+
+                            b64 = self._pdf_image_to_png_b64(stream, width, height)
+                            if b64:
+                                images.append({
+                                    "page": page_num,
+                                    "image_index": image_index,
+                                    "width": width,
+                                    "height": height,
+                                    "data_b64": b64,
+                                    "color_space": str(image_info.get("colorspace", "RGB")),
+                                    "x0": round(float(image_info.get("x0", 0.0) or 0.0), 2),
+                                    "x1": round(float(image_info.get("x1", 0.0) or 0.0), 2),
+                                    "top": round(float(image_info.get("top", 0.0) or 0.0), 2),
+                                    "bottom": round(float(image_info.get("bottom", 0.0) or 0.0), 2),
+                                    "page_width": page_width,
+                                    "page_height": page_height,
+                                })
+                        except Exception as ex:
+                            logger.debug(f"Skip image {image_index} on page {page_num}: {ex}")
+        except Exception as e:
+            logger.warning(f"Image extraction failed: {e}")
+
+        if not images:
+            try:
+                reader = pypdf.PdfReader(pdf_path)
+                for page_num, page in enumerate(reader.pages, 1):
+                    if "/Resources" in page and "/XObject" in page.get("/Resources", {}):
+                        xobjects = page["/Resources"]["/XObject"]
+                        if not xobjects:
+                            continue
                         for obj_name, obj in xobjects.items():
                             try:
                                 if hasattr(obj, "get") and obj.get("/Subtype") == "/Image":
@@ -784,7 +942,6 @@ class PDFExtractor:
                                     if width <= 20 or height <= 20:
                                         continue
 
-                                    # Try to convert raw PDF image data to valid PNG
                                     b64 = self._pdf_image_to_png_b64(obj, width, height)
                                     if b64:
                                         images.append({
@@ -795,28 +952,9 @@ class PDFExtractor:
                                             "color_space": "RGB",
                                         })
                             except Exception as ex:
-                                logger.debug(f"Skip image {obj_name} on page {page_num}: {ex}")
-        except Exception as e:
-            logger.warning(f"Image extraction failed: {e}")
-
-        # Fallback: use pdf2image to render full pages if no embedded images found
-        if not images:
-            try:
-                page_images = convert_from_path(pdf_path, dpi=150, fmt="png")
-                for i, img in enumerate(page_images, 1):
-                    buf = io.BytesIO()
-                    img.save(buf, format="PNG")
-                    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-                    images.append({
-                        "page": i,
-                        "width": img.width,
-                        "height": img.height,
-                        "data_b64": b64,
-                        "color_space": "RGB",
-                        "is_page_render": True,
-                    })
+                                logger.debug(f"Skip fallback image {obj_name} on page {page_num}: {ex}")
             except Exception as e:
-                logger.warning(f"pdf2image page render failed: {e}")
+                logger.warning(f"Fallback image extraction failed: {e}")
 
         return images
 
@@ -824,7 +962,7 @@ class PDFExtractor:
         """Render each page as base64 PNG for Gemini Vision."""
         renders = []
         try:
-            images = convert_from_path(pdf_path, dpi=dpi, fmt="png")
+            images = self._render_pdf_to_images(pdf_path, dpi=dpi)
             for img in images:
                 buf = io.BytesIO()
                 img.save(buf, format="PNG")

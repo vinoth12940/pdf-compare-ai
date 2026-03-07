@@ -19,11 +19,22 @@ export interface ComparisonResult {
     page_renders_b?: string[];
     diff_overlay_a?: string[];
     diff_overlay_b?: string[];
+    viewer_regions?: ViewerRegion[] | null;
+    page_pairs?: PagePair[] | null;
     stats: Record<string, number | boolean>;
+}
+
+export interface BoundingBox {
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
 }
 
 export interface TextDiff {
     page: number;
+    page_a?: number | null;
+    page_b?: number | null;
     content_a: string;
     content_b: string;
     diff_type: 'added' | 'removed' | 'changed' | 'unchanged';
@@ -31,10 +42,14 @@ export interface TextDiff {
     section_type: string;
     style_changes?: string[] | null;
     layout_changes?: string[] | null;
+    bbox_a?: BoundingBox | null;
+    bbox_b?: BoundingBox | null;
 }
 
 export interface TableDiff {
     page: number;
+    page_a?: number | null;
+    page_b?: number | null;
     table_index: number;
     headers_a: string[] | null;
     headers_b: string[] | null;
@@ -42,6 +57,8 @@ export interface TableDiff {
     rows_added: number;
     rows_removed: number;
     diff_type: 'added' | 'removed' | 'changed' | 'unchanged';
+    bbox_a?: BoundingBox | null;
+    bbox_b?: BoundingBox | null;
 }
 
 export interface TableCellDiff {
@@ -54,11 +71,15 @@ export interface TableCellDiff {
 
 export interface ImageDiff {
     page: number;
+    page_a?: number | null;
+    page_b?: number | null;
     image_index: number;
     description_a: string | null;
     description_b: string | null;
     diff_type: 'added' | 'removed' | 'changed' | 'unchanged';
     ai_analysis: string;
+    bbox_a?: BoundingBox | null;
+    bbox_b?: BoundingBox | null;
 }
 
 export interface PageDiff {
@@ -69,6 +90,25 @@ export interface PageDiff {
     description: string;
     text_in_a: string | null;
     text_in_b: string | null;
+}
+
+export interface ViewerRegion {
+    page_a?: number | null;
+    page_b?: number | null;
+    bbox_a?: BoundingBox | null;
+    bbox_b?: BoundingBox | null;
+    change_type: 'added' | 'removed' | 'changed' | 'unchanged';
+    source: string;
+    label: string;
+    similarity_score?: number | null;
+}
+
+export interface PagePair {
+    slot: number;
+    page_a?: number | null;
+    page_b?: number | null;
+    relation: string;
+    similarity_score: number;
 }
 
 export async function comparePDFs(

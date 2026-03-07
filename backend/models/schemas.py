@@ -10,8 +10,17 @@ class DiffType(str, Enum):
     UNCHANGED = "unchanged"
 
 
+class BoundingBox(BaseModel):
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+
 class TextDiff(BaseModel):
     page: int
+    page_a: Optional[int] = None
+    page_b: Optional[int] = None
     content_a: str
     content_b: str
     diff_type: DiffType
@@ -20,6 +29,8 @@ class TextDiff(BaseModel):
     style_changes: Optional[List[str]] = None
     layout_changes: Optional[List[str]] = None
     position: float = 0.0  # vertical position on page for top-to-bottom ordering
+    bbox_a: Optional[BoundingBox] = None
+    bbox_b: Optional[BoundingBox] = None
 
 
 class PageDiff(BaseModel):
@@ -43,6 +54,8 @@ class TableCellDiff(BaseModel):
 
 class TableDiff(BaseModel):
     page: int
+    page_a: Optional[int] = None
+    page_b: Optional[int] = None
     table_index: int
     headers_a: Optional[List[str]]
     headers_b: Optional[List[str]]
@@ -50,15 +63,40 @@ class TableDiff(BaseModel):
     rows_added: int
     rows_removed: int
     diff_type: DiffType
+    bbox_a: Optional[BoundingBox] = None
+    bbox_b: Optional[BoundingBox] = None
 
 
 class ImageDiff(BaseModel):
     page: int
+    page_a: Optional[int] = None
+    page_b: Optional[int] = None
     image_index: int
     description_a: Optional[str]
     description_b: Optional[str]
     diff_type: DiffType
     ai_analysis: str
+    bbox_a: Optional[BoundingBox] = None
+    bbox_b: Optional[BoundingBox] = None
+
+
+class ViewerRegion(BaseModel):
+    page_a: Optional[int] = None
+    page_b: Optional[int] = None
+    bbox_a: Optional[BoundingBox] = None
+    bbox_b: Optional[BoundingBox] = None
+    change_type: DiffType
+    source: str
+    label: str
+    similarity_score: Optional[float] = None
+
+
+class PagePair(BaseModel):
+    slot: int
+    page_a: Optional[int] = None
+    page_b: Optional[int] = None
+    relation: str
+    similarity_score: float = 0.0
 
 
 class ComparisonResult(BaseModel):
@@ -78,6 +116,8 @@ class ComparisonResult(BaseModel):
     page_renders_b: Optional[List[str]] = None
     diff_overlay_a: Optional[List[str]] = None
     diff_overlay_b: Optional[List[str]] = None
+    viewer_regions: Optional[List[ViewerRegion]] = None
+    page_pairs: Optional[List[PagePair]] = None
     stats: Dict[str, Any]
 
 
